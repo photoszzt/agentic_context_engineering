@@ -21,7 +21,7 @@ A simplified implementation of Agentic Context Engineering (ACE) for Claude Code
 
 1. Clone this repository:
 ```bash
-git clone https://github.com/PaodingSoftware/agentic_context_engineering.git
+git clone https://github.com/bluenoah1991/agentic_context_engineering.git
 cd agentic_context_engineering
 ```
 
