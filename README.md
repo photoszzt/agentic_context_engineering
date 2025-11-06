@@ -16,23 +16,23 @@ A simplified implementation of Agentic Context Engineering (ACE) for Claude Code
 - Python 3.8+
 - Claude Code
 - [claude-agent-sdk](https://github.com/anthropics/claude-agent-sdk-python)
+- Node.js and npm
 
 ### Setup
 
-1. Clone this repository:
+1. Clone and install:
 ```bash
 git clone https://github.com/bluenoah1991/agentic_context_engineering.git
 cd agentic_context_engineering
+npm install
 ```
 
 2. Install required Python package:
 ```bash
-pip install claude-agent-sdk
+pip3 install claude-agent-sdk
 ```
 
-3. Enable hooks in Claude Code:
-   - The `.claude/settings.json` file is already configured with the necessary hooks
-   - Hooks will activate automatically when you start Claude Code in this directory
+3. Restart Claude Code - hooks will be active across all your projects
 
 ## How It Works
 
@@ -74,7 +74,7 @@ rm .claude/diagnostic_mode
 
 ### Customizing Prompts
 
-Prompts are located in `.claude/prompts/`:
+Prompts are located in `~/.claude/prompts/`:
 
 - `reflection.txt`: Template for key point extraction from reasoning trajectories
 - `playbook.txt`: Template for injecting key points into sessions
@@ -83,7 +83,9 @@ Prompts are located in `.claude/prompts/`:
 
 ```
 .
-├── .claude/
+├── install.js                 # Installation script
+├── package.json               # npm package configuration
+├── src/
 │   ├── hooks/
 │   │   ├── common.py           # Shared utilities
 │   │   ├── session_end.py      # SessionEnd hook
@@ -92,11 +94,7 @@ Prompts are located in `.claude/prompts/`:
 │   ├── prompts/
 │   │   ├── reflection.txt      # Key point extraction template
 │   │   └── playbook.txt        # Injection template
-│   ├── settings.json           # Hook configuration
-│   ├── playbook.json          # Generated: accumulated key points
-│   ├── last_session.txt       # Generated: session tracking
-│   └── diagnostic/            # Generated: debug logs (if enabled)
-├── .gitignore
+│   └── settings.json           # Hook configuration template
 └── README.md
 ```
 

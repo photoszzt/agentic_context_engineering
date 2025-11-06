@@ -1,9 +1,0 @@
-# System generated files
-diagnostic/
-last_session.txt
-playbook.json
-
-# Python
-__pycache__/
-*.pyc
-*.pyo

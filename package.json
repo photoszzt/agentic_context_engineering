@@ -1,0 +1,21 @@
+{
+  "name": "agentic-context-engineering",
+  "version": "1.0.0",
+  "description": "Agentic Context Engineering - Automatic learning and knowledge accumulation system for Claude Code that  extracts key points from conversations and injects them into future sessions.",
+  "main": "install.js",
+  "scripts": {
+    "install": "node install.js"
+  },
+  "keywords": [
+    "claude-code",
+    "hooks",
+    "agentic",
+    "context-engineering"
+  ],
+  "author": "bluenoah1991",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/bluenoah1991/agentic_context_engineering.git"
+  }
+}

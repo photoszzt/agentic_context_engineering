@@ -19,7 +19,13 @@ def get_project_dir() -> Path:
     project_dir = os.getenv('CLAUDE_PROJECT_DIR')
     if project_dir:
         return Path(project_dir)
-    return Path(__file__).resolve().parent.parent.parent
+    return Path.home()
+
+
+def get_user_claude_dir() -> Path:
+    """Get user .claude directory"""
+    home = Path.home()
+    return home / ".claude"
 
 
 def generate_keypoint_name(existing_names: set) -> str:
@@ -219,7 +225,7 @@ async def extract_keypoints(messages: list[dict], playbook: dict, diagnostic_nam
 
 def load_template(template_name: str) -> str:
     """Load prompt template"""
-    template_path = get_project_dir() / ".claude" / "prompts" / template_name
+    template_path = get_user_claude_dir() / "prompts" / template_name
     with open(template_path, 'r', encoding='utf-8') as f:
         return f.read()
 

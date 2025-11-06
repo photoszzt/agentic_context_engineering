@@ -5,7 +5,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python .claude/hooks/user_prompt_inject.py",
+            "command": "{{HOOK_COMMAND_USER_PROMPT_INJECT}}",
             "timeout": 10
           }
         ]
@@ -16,7 +16,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python .claude/hooks/session_end.py",
+            "command": "{{HOOK_COMMAND_SESSION_END}}",
             "timeout": 120
           }
         ]
@@ -27,7 +27,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python .claude/hooks/precompact.py",
+            "command": "{{HOOK_COMMAND_PRECOMPACT}}",
             "timeout": 120
           }
         ]
