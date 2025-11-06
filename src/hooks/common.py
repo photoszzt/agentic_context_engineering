@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-"""Shared utilities for hooks"""
 import json
 import os
 from pathlib import Path
@@ -15,7 +14,6 @@ except ImportError:
 
 
 def get_project_dir() -> Path:
-    """Get project directory"""
     project_dir = os.getenv('CLAUDE_PROJECT_DIR')
     if project_dir:
         return Path(project_dir)
@@ -23,13 +21,49 @@ def get_project_dir() -> Path:
 
 
 def get_user_claude_dir() -> Path:
-    """Get user .claude directory"""
     home = Path.home()
     return home / ".claude"
 
 
+def is_diagnostic_mode() -> bool:
+    flag_file = get_project_dir() / ".claude" / "diagnostic_mode"
+    return flag_file.exists()
+
+
+def save_diagnostic(content: str, name: str):
+    diagnostic_dir = get_project_dir() / ".claude" / "diagnostic"
+    diagnostic_dir.mkdir(parents=True, exist_ok=True)
+    
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    filepath = diagnostic_dir / f"{timestamp}_{name}.txt"
+    
+    with open(filepath, 'w', encoding='utf-8') as f:
+        f.write(content)
+
+
+def is_first_message(session_id: str) -> bool:
+    session_file = get_project_dir() / ".claude" / "last_session.txt"
+    
+    if session_file.exists():
+        last_session_id = session_file.read_text().strip()
+        return session_id != last_session_id
+    
+    return True
+
+
+def mark_session(session_id: str):
+    session_file = get_project_dir() / ".claude" / "last_session.txt"
+    session_file.parent.mkdir(parents=True, exist_ok=True)
+    session_file.write_text(session_id)
+
+
+def clear_session():
+    session_file = get_project_dir() / ".claude" / "last_session.txt"
+    if session_file.exists():
+        session_file.unlink()
+
+
 def generate_keypoint_name(existing_names: set) -> str:
-    """Generate unique key point name (kpt_001 format)"""
     max_num = 0
     for name in existing_names:
         if name.startswith("kpt_"):
@@ -43,7 +77,6 @@ def generate_keypoint_name(existing_names: set) -> str:
 
 
 def load_playbook() -> dict:
-    """Load playbook with automatic migration"""
     playbook_path = get_project_dir() / ".claude" / "playbook.json"
     
     if not playbook_path.exists():
@@ -56,7 +89,6 @@ def load_playbook() -> dict:
         if "key_points" not in data:
             data["key_points"] = []
             
-        # Ensure all key points have name and score
         keypoints = []
         existing_names = set()
         
@@ -81,7 +113,6 @@ def load_playbook() -> dict:
 
 
 def save_playbook(playbook: dict):
-    """Save playbook"""
     playbook["last_updated"] = datetime.now().isoformat()
     playbook_path = get_project_dir() / ".claude" / "playbook.json"
     
@@ -90,22 +121,33 @@ def save_playbook(playbook: dict):
         json.dump(playbook, f, indent=2, ensure_ascii=False)
 
 
+def format_playbook(playbook: dict) -> str:
+    key_points = playbook.get('key_points', [])
+    if not key_points:
+        return ""
+    
+    key_points_text = "\n".join(
+        f"- {kp['text'] if isinstance(kp, dict) else kp}"
+        for kp in key_points
+    )
+    
+    template = load_template("playbook.txt")
+    return template.format(key_points=key_points_text)
+
+
 def update_playbook_data(playbook: dict, extraction_result: dict) -> dict:
-    """Add new key points and update scores based on evaluations"""
     new_key_points = extraction_result.get("new_key_points", [])
     evaluations = extraction_result.get("evaluations", [])
     
     existing_names = {kp["name"] for kp in playbook["key_points"]}
     existing_texts = {kp["text"] for kp in playbook["key_points"]}
     
-    # Add new key points
     for text in new_key_points:
         if text and text not in existing_texts:
             name = generate_keypoint_name(existing_names)
             playbook["key_points"].append({"name": name, "text": text, "score": 0})
             existing_names.add(name)
     
-    # Update scores
     rating_delta = {"helpful": 1, "harmful": -3, "neutral": -1}
     name_to_kp = {kp["name"]: kp for kp in playbook["key_points"]}
     
@@ -116,14 +158,12 @@ def update_playbook_data(playbook: dict, extraction_result: dict) -> dict:
         if name in name_to_kp:
             name_to_kp[name]["score"] += rating_delta.get(rating, 0)
     
-    # Remove key points with score <= -5
     playbook["key_points"] = [kp for kp in playbook["key_points"] if kp.get("score", 0) > -5]
     
     return playbook
 
 
 def load_transcript(transcript_path: str) -> list[dict]:
-    """Extract user/assistant messages from transcript"""
     conversations = []
     
     with open(transcript_path, 'r', encoding='utf-8') as f:
@@ -162,8 +202,13 @@ def load_transcript(transcript_path: str) -> list[dict]:
     return conversations
 
 
+def load_template(template_name: str) -> str:
+    template_path = get_user_claude_dir() / "prompts" / template_name
+    with open(template_path, 'r', encoding='utf-8') as f:
+        return f.read()
+
+
 async def extract_keypoints(messages: list[dict], playbook: dict, diagnostic_name: str = "reflection") -> dict:
-    """Extract new key points and evaluate existing ones"""
     if not SDK_AVAILABLE:
         return {"new_key_points": [], "evaluations": []}
     
@@ -204,7 +249,6 @@ async def extract_keypoints(messages: list[dict], playbook: dict, diagnostic_nam
         save_diagnostic(f"# PROMPT\n{prompt}\n\n{'=' * 80}\n\n# RESPONSE\n{response_text}\n",
                        diagnostic_name)
     
-    # Parse JSON response
     if "```json" in response_text:
         start = response_text.find("```json") + 7
         end = response_text.find("```", start)
@@ -221,28 +265,3 @@ async def extract_keypoints(messages: list[dict], playbook: dict, diagnostic_nam
         "new_key_points": result.get("new_key_points", []),
         "evaluations": result.get("evaluations", [])
     }
-
-
-def load_template(template_name: str) -> str:
-    """Load prompt template"""
-    template_path = get_user_claude_dir() / "prompts" / template_name
-    with open(template_path, 'r', encoding='utf-8') as f:
-        return f.read()
-
-
-def is_diagnostic_mode() -> bool:
-    """Check if diagnostic mode is enabled"""
-    flag_file = get_project_dir() / ".claude" / "diagnostic_mode"
-    return flag_file.exists()
-
-
-def save_diagnostic(content: str, name: str):
-    """Save diagnostic output"""
-    diagnostic_dir = get_project_dir() / ".claude" / "diagnostic"
-    diagnostic_dir.mkdir(parents=True, exist_ok=True)
-    
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    filepath = diagnostic_dir / f"{timestamp}_{name}.txt"
-    
-    with open(filepath, 'w', encoding='utf-8') as f:
-        f.write(content)

@@ -1,45 +1,10 @@
 #!/usr/bin/env python3
-"""User Prompt Hook - Inject playbook on first message of new session"""
 import json
 import sys
-from pathlib import Path
 from common import (
-    load_playbook, load_template, is_diagnostic_mode, 
-    save_diagnostic, get_project_dir
+    load_playbook, format_playbook, is_diagnostic_mode, 
+    save_diagnostic, is_first_message, mark_session
 )
-
-
-def is_first_message(session_id: str) -> bool:
-    """Check if this is the first message of a new session"""
-    session_file = get_project_dir() / ".claude" / "last_session.txt"
-    
-    if session_file.exists():
-        last_session_id = session_file.read_text().strip()
-        return session_id != last_session_id
-    
-    return True
-
-
-def mark_session(session_id: str):
-    """Mark current session as seen"""
-    session_file = get_project_dir() / ".claude" / "last_session.txt"
-    session_file.parent.mkdir(parents=True, exist_ok=True)
-    session_file.write_text(session_id)
-
-
-def format_playbook(playbook: dict) -> str:
-    """Format playbook for injection"""
-    key_points = playbook.get('key_points', [])
-    if not key_points:
-        return ""
-    
-    key_points_text = "\n".join(
-        f"- {kp['text'] if isinstance(kp, dict) else kp}"
-        for kp in key_points
-    )
-    
-    template = load_template("playbook.txt")
-    return template.format(key_points=key_points_text)
 
 
 def main():

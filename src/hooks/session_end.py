@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
-"""Session End Hook - Extract key points and evaluate playbook"""
 import json
 import sys
 import asyncio
 from common import (
     load_playbook, save_playbook, load_transcript,
-    extract_keypoints, update_playbook_data
+    extract_keypoints, update_playbook_data, clear_session
 )
 
 
@@ -22,6 +21,8 @@ async def main():
     extraction_result = await extract_keypoints(messages, playbook, "session_end_reflection")
     playbook = update_playbook_data(playbook, extraction_result)
     save_playbook(playbook)
+    
+    clear_session()
 
 
 if __name__ == "__main__":
