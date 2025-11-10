@@ -76,22 +76,45 @@ def generate_keypoint_name(existing_names: set) -> str:
     return f"kpt_{max_num + 1:03d}"
 
 
+def load_settings() -> dict:
+    settings_path = get_project_dir() / ".claude" / "settings.json"
+
+    if not settings_path.exists():
+        return {"playbook_update_on_exit": False}
+
+    try:
+        with open(settings_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        return data
+    except Exception:
+        return {"playbook_update_on_exit": False}
+
+
+def contains_exit_command(messages: list[dict]) -> bool:
+    """Check if the conversation contains an /exit command."""
+    for msg in messages:
+        content = msg.get('content', '')
+        if isinstance(content, str) and content.strip().startswith('/exit'):
+            return True
+    return False
+
+
 def load_playbook() -> dict:
     playbook_path = get_project_dir() / ".claude" / "playbook.json"
-    
+
     if not playbook_path.exists():
         return {"version": "1.0", "last_updated": None, "key_points": []}
-    
+
     try:
         with open(playbook_path, 'r', encoding='utf-8') as f:
             data = json.load(f)
-            
+
         if "key_points" not in data:
             data["key_points"] = []
-            
+
         keypoints = []
         existing_names = set()
-        
+
         for item in data["key_points"]:
             if isinstance(item, str):
                 name = generate_keypoint_name(existing_names)
@@ -104,10 +127,10 @@ def load_playbook() -> dict:
                     item["score"] = 0
                 existing_names.add(item["name"])
                 keypoints.append(item)
-        
+
         data["key_points"] = keypoints
         return data
-        
+
     except Exception:
         return {"version": "1.0", "last_updated": None, "key_points": []}
 

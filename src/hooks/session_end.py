@@ -4,24 +4,31 @@ import sys
 import asyncio
 from common import (
     load_playbook, save_playbook, load_transcript,
-    extract_keypoints, update_playbook_data, clear_session
+    extract_keypoints, update_playbook_data, clear_session,
+    load_settings, contains_exit_command
 )
 
 
 async def main():
     input_data = json.load(sys.stdin)
-    
+
     transcript_path = input_data.get("transcript_path")
     messages = load_transcript(transcript_path)
-    
+
     if not messages:
         sys.exit(0)
-    
+
+    settings = load_settings()
+    update_on_exit = settings.get("playbook_update_on_exit", False)
+
+    if not update_on_exit and contains_exit_command(messages):
+        sys.exit(0)
+
     playbook = load_playbook()
     extraction_result = await extract_keypoints(messages, playbook, "session_end_reflection")
     playbook = update_playbook_data(playbook, extraction_result)
     save_playbook(playbook)
-    
+
     clear_session()
 
 

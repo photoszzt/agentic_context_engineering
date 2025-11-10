@@ -1,4 +1,5 @@
 {
+  "playbook_update_on_exit": false,
   "hooks": {
     "UserPromptSubmit": [
       {
