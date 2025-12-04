@@ -5,12 +5,10 @@ from pathlib import Path
 from datetime import datetime
 
 try:
-    from claude_agent_sdk import (
-        ClaudeAgentOptions, ClaudeSDKClient, AssistantMessage, TextBlock
-    )
-    SDK_AVAILABLE = True
+    import anthropic
+    ANTHROPIC_AVAILABLE = True
 except ImportError:
-    SDK_AVAILABLE = False
+    ANTHROPIC_AVAILABLE = False
 
 
 def get_project_dir() -> Path:
@@ -223,7 +221,19 @@ def load_template(template_name: str) -> str:
 
 
 async def extract_keypoints(messages: list[dict], playbook: dict, diagnostic_name: str = "reflection") -> dict:
-    if not SDK_AVAILABLE:
+    if not ANTHROPIC_AVAILABLE:
+        return {"new_key_points": [], "evaluations": []}
+    
+    model = os.getenv("ANTHROPIC_MODEL")
+    if not model:
+        return {"new_key_points": [], "evaluations": []}
+    
+    api_key = os.getenv("ANTHROPIC_AUTH_TOKEN") or os.getenv("ANTHROPIC_API_KEY")
+    if not api_key:
+        return {"new_key_points": [], "evaluations": []}
+    
+    base_url = os.getenv("ANTHROPIC_BASE_URL")
+    if not base_url:
         return {"new_key_points": [], "evaluations": []}
     
     template = load_template("reflection.txt")
@@ -238,26 +248,17 @@ async def extract_keypoints(messages: list[dict], playbook: dict, diagnostic_nam
         playbook=json.dumps(playbook_dict, indent=2, ensure_ascii=False)
     )
     
-    options = ClaudeAgentOptions(
-        max_turns=1,
-        permission_mode="bypassPermissions",
-        allowed_tools=[]
+    client = anthropic.Anthropic(api_key=api_key, base_url=base_url)
+    
+    response = client.messages.create(
+        model=model,
+        max_tokens=4096,
+        messages=[
+            {"role": "user", "content": prompt}
+        ]
     )
     
-    response_text = ""
-    client = ClaudeSDKClient(options=options)
-    
-    try:
-        await client.connect()
-        await client.query(prompt)
-        
-        async for message in client.receive_response():
-            if isinstance(message, AssistantMessage):
-                for block in message.content:
-                    if isinstance(block, TextBlock):
-                        response_text += block.text
-    finally:
-        await client.disconnect()
+    response_text = response.content[0].text
     
     if is_diagnostic_mode():
         save_diagnostic(f"# PROMPT\n{prompt}\n\n{'=' * 80}\n\n# RESPONSE\n{response_text}\n",
@@ -274,7 +275,11 @@ async def extract_keypoints(messages: list[dict], playbook: dict, diagnostic_nam
     else:
         json_text = response_text.strip()
     
-    result = json.loads(json_text)
+    try:
+        result = json.loads(json_text)
+    except json.JSONDecodeError:
+        return {"new_key_points": [], "evaluations": []}
+    
     return {
         "new_key_points": result.get("new_key_points", []),
         "evaluations": result.get("evaluations", [])

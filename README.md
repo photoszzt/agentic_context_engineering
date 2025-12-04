@@ -15,7 +15,7 @@ A simplified implementation of Agentic Context Engineering (ACE) for Claude Code
 
 - Python 3.8+
 - Claude Code
-- [claude-agent-sdk](https://github.com/anthropics/claude-agent-sdk-python)
+- [anthropic](https://github.com/anthropics/anthropic-sdk-python) Python SDK
 - Node.js and npm
 
 ### Setup
@@ -29,7 +29,7 @@ npm install
 
 2. Install required Python package:
 ```bash
-pip3 install claude-agent-sdk
+pip3 install anthropic
 ```
 
 3. Restart Claude Code - hooks will be active across all your projects
