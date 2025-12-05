@@ -32,7 +32,15 @@ npm install
 pip3 install anthropic
 ```
 
-3. Restart Claude Code - hooks will be active across all your projects
+3. Set environment variables for the LLM API:
+
+| Environment Variable | Description | Required |
+|---------------------|-------------|----------|
+| `AGENTIC_CONTEXT_MODEL` | Model name for key point extraction | ✅ Yes |
+| `AGENTIC_CONTEXT_API_KEY` | API key (fallback: `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_API_KEY`) | Optional |
+| `AGENTIC_CONTEXT_BASE_URL` | API base URL (fallback: `ANTHROPIC_BASE_URL`) | Optional |
+
+4. Restart Claude Code - hooks will be active across all your projects
 
 ## How It Works
 
