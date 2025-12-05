@@ -258,7 +258,16 @@ async def extract_keypoints(messages: list[dict], playbook: dict, diagnostic_nam
         ]
     )
     
-    response_text = response.content[0].text
+    response_text_parts = []
+    for block in response.content:
+        block_type = getattr(block, 'type', None)
+        if block_type == 'text':
+            response_text_parts.append(block.text)
+    
+    response_text = "".join(response_text_parts)
+    
+    if not response_text:
+        return {"new_key_points": [], "evaluations": []}
     
     if is_diagnostic_mode():
         save_diagnostic(f"# PROMPT\n{prompt}\n\n{'=' * 80}\n\n# RESPONSE\n{response_text}\n",
