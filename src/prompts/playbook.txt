@@ -1,7 +1,11 @@
 # Playbook
 
-The following key points were learned from previous sessions:
+The following key points were learned from previous sessions. Each entry shows how many times it was rated helpful or harmful by the reflection system.
+
+- Higher helpful counts indicate proven, valuable guidance.
+- Higher harmful counts indicate guidance that has been problematic.
+- Consider the ratio of helpful to harmful when deciding how much to trust each key point. A key point with many helpful ratings and few harmful ones is highly reliable. A key point with low counts in both is untested.
 
 {key_points}
 
-Use these key points to improve your responses.
+Use these key points to improve your responses, weighing them by their track record shown above.
