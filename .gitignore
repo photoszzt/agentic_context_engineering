@@ -4,3 +4,4 @@
 .claude/diagnostic/
 .planning
 __pycache__
+.coverage
