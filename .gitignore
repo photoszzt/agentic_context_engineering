@@ -2,3 +2,5 @@
 .claude/playbook.json
 .claude/last_session.txt
 .claude/diagnostic/
+.planning
+__pycache__

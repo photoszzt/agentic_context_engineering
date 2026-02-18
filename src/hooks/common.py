@@ -178,6 +178,9 @@ def update_playbook_data(playbook: dict, extraction_result: dict) -> dict:
 
 
 def load_transcript(transcript_path: str) -> list[dict]:
+    if not transcript_path or not Path(transcript_path).exists():
+        return []
+
     conversations = []
 
     with open(transcript_path, "r", encoding="utf-8") as f:
