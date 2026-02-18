@@ -90,6 +90,7 @@ def load_settings() -> dict:
 
 
 def load_playbook() -> dict:
+    # @implements REQ-SCORE-004, REQ-SCORE-005, REQ-SCORE-006
     playbook_path = get_project_dir() / ".claude" / "playbook.json"
 
     if not playbook_path.exists():
@@ -104,19 +105,55 @@ def load_playbook() -> dict:
 
         keypoints = []
         existing_names = set()
+        migrated_entries = []
 
         for item in data["key_points"]:
             if isinstance(item, str):
+                # Branch 1: Bare string (REQ-SCORE-004, SCN-SCORE-004-01)
                 name = generate_keypoint_name(existing_names)
-                keypoints.append({"name": name, "text": item, "score": 0})
+                keypoints.append({"name": name, "text": item, "helpful": 0, "harmful": 0})
                 existing_names.add(name)
+                migrated_entries.append({"name": name, "from": "bare_string", "original_score": None})
             elif isinstance(item, dict):
-                if "name" not in item:
-                    item["name"] = generate_keypoint_name(existing_names)
-                if "score" not in item:
-                    item["score"] = 0
-                existing_names.add(item["name"])
-                keypoints.append(item)
+                if "helpful" in item and "harmful" in item:
+                    # Branch 0: Already migrated (no-op, keep as-is)
+                    if "name" not in item:
+                        item["name"] = generate_keypoint_name(existing_names)
+                    # Drop "score" if it somehow co-exists (defensive, SCN-SCORE-006-02)
+                    item.pop("score", None)
+                    existing_names.add(item["name"])
+                    keypoints.append(item)
+                elif "score" in item:
+                    # Branch 3: Dict with score (REQ-SCORE-006, SCN-SCORE-006-01)
+                    if "name" not in item:
+                        item["name"] = generate_keypoint_name(existing_names)
+                    original_score = item.pop("score")
+                    item["helpful"] = max(original_score, 0)
+                    item["harmful"] = max(-original_score, 0)
+                    existing_names.add(item["name"])
+                    keypoints.append(item)
+                    migrated_entries.append({"name": item["name"], "from": "dict_with_score", "original_score": original_score})
+                else:
+                    # Branch 2: Dict without score or counters (REQ-SCORE-005, SCN-SCORE-005-01)
+                    if "name" not in item:
+                        item["name"] = generate_keypoint_name(existing_names)
+                    item["helpful"] = 0
+                    item["harmful"] = 0
+                    existing_names.add(item["name"])
+                    keypoints.append(item)
+                    migrated_entries.append({"name": item["name"], "from": "dict_no_score", "original_score": None})
+
+        # @invariant INV-SCORE-001, INV-SCORE-002 (counters >= 0)
+        # @invariant INV-SCORE-004 (no score field)
+        # @invariant INV-SCORE-005 (round-trip stability: migrated entries re-load as Branch 0 no-op)
+
+        # LOG-SCORE-001: Diagnostic logging for migration
+        if migrated_entries and is_diagnostic_mode():
+            migration_summary = json.dumps(migrated_entries, indent=2)
+            save_diagnostic(
+                f"Migrated {len(migrated_entries)} playbook entries:\n{migration_summary}",
+                "playbook_migration"
+            )
 
         data["key_points"] = keypoints
         return data
@@ -135,12 +172,14 @@ def save_playbook(playbook: dict):
 
 
 def format_playbook(playbook: dict) -> str:
+    # @implements REQ-SCORE-003, REQ-SCORE-008
     key_points = playbook.get("key_points", [])
     if not key_points:
         return ""
 
     key_points_text = "\n".join(
-        f"- {kp['text'] if isinstance(kp, dict) else kp}" for kp in key_points
+        f"[{kp['name']}] helpful={kp['helpful']} harmful={kp['harmful']} :: {kp['text']}"
+        for kp in key_points
     )
 
     template = load_template("playbook.txt")
@@ -148,31 +187,61 @@ def format_playbook(playbook: dict) -> str:
 
 
 def update_playbook_data(playbook: dict, extraction_result: dict) -> dict:
+    # @implements REQ-SCORE-001, REQ-SCORE-002, REQ-SCORE-007
     new_key_points = extraction_result.get("new_key_points", [])
     evaluations = extraction_result.get("evaluations", [])
 
     existing_names = {kp["name"] for kp in playbook["key_points"]}
     existing_texts = {kp["text"] for kp in playbook["key_points"]}
 
+    # REQ-SCORE-001: New key points use helpful/harmful counters
     for text in new_key_points:
         if text and text not in existing_texts:
             name = generate_keypoint_name(existing_names)
-            playbook["key_points"].append({"name": name, "text": text, "score": 0})
+            playbook["key_points"].append({"name": name, "text": text, "helpful": 0, "harmful": 0})
             existing_names.add(name)
 
-    rating_delta = {"helpful": 1, "harmful": -3, "neutral": -1}
+    # REQ-SCORE-002: Counter increment per rating
     name_to_kp = {kp["name"]: kp for kp in playbook["key_points"]}
 
     for eval_item in evaluations:
         name = eval_item.get("name", "")
-        rating = eval_item.get("rating", "neutral")
+        rating = eval_item.get("rating", "")
 
         if name in name_to_kp:
-            name_to_kp[name]["score"] += rating_delta.get(rating, 0)
+            if rating == "helpful":
+                name_to_kp[name]["helpful"] += 1
+            elif rating == "harmful":
+                name_to_kp[name]["harmful"] += 1
+            # "neutral" and unrecognized ratings: no change (SCN-SCORE-002-03, SCN-SCORE-002-04)
 
-    playbook["key_points"] = [
-        kp for kp in playbook["key_points"] if kp.get("score", 0) > -5
-    ]
+    # REQ-SCORE-007: Pruning rule -- harmful >= 3 AND harmful > helpful
+    # @invariant INV-SCORE-003: Zero-evaluation entries (helpful=0, harmful=0) are never pruned
+    pruned_entries = []
+    surviving = []
+    for kp in playbook["key_points"]:
+        harmful = kp.get("harmful", 0)
+        helpful = kp.get("helpful", 0)
+        if harmful >= 3 and harmful > helpful:
+            pruned_entries.append(kp)
+        else:
+            surviving.append(kp)
+
+    # LOG-SCORE-002: Diagnostic logging for pruning
+    if pruned_entries and is_diagnostic_mode():
+        prune_details = []
+        for kp in pruned_entries:
+            prune_details.append(
+                f"  - {kp['name']}: \"{kp['text'][:80]}\" "
+                f"(helpful={kp['helpful']}, harmful={kp['harmful']}) "
+                f"reason: harmful >= 3 AND harmful > helpful"
+            )
+        save_diagnostic(
+            f"Pruned {len(pruned_entries)} key points:\n" + "\n".join(prune_details),
+            "playbook_pruning"
+        )
+
+    playbook["key_points"] = surviving
 
     return playbook
 
@@ -255,8 +324,6 @@ async def extract_keypoints(
         return {"new_key_points": [], "evaluations": []}
 
     base_url = os.getenv("AGENTIC_CONTEXT_BASE_URL") or os.getenv("ANTHROPIC_BASE_URL")
-    if not base_url:
-        return {"new_key_points": [], "evaluations": []}
 
     template = load_template("reflection.txt")
 
@@ -271,7 +338,10 @@ async def extract_keypoints(
         playbook=json.dumps(playbook_dict, indent=2, ensure_ascii=False),
     )
 
-    client = anthropic.Anthropic(api_key=api_key, base_url=base_url)
+    client_kwargs = {"api_key": api_key}
+    if base_url:
+        client_kwargs["base_url"] = base_url
+    client = anthropic.Anthropic(**client_kwargs)
 
     response = client.messages.create(
         model=model, max_tokens=4096, messages=[{"role": "user", "content": prompt}]
