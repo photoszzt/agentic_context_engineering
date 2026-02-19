@@ -441,7 +441,10 @@ def load_transcript(transcript_path: str) -> list[dict]:
             if not line.strip():
                 continue
 
-            entry = json.loads(line)
+            try:
+                entry = json.loads(line)
+            except json.JSONDecodeError:
+                continue
 
             if entry.get("type") not in ["user", "assistant"]:
                 continue
