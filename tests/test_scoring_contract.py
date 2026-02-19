@@ -23,6 +23,7 @@ from src.hooks.common import (
     save_playbook,
     update_playbook_data,
     format_playbook,
+    SECTION_SLUGS,
 )
 
 
@@ -65,6 +66,17 @@ def _write_playbook_file(playbook_path, data):
         json.dump(data, f, indent=2, ensure_ascii=False)
 
 
+def _make_sections_playbook(key_points, section="OTHERS"):
+    """Helper to construct a sections-based playbook dict for in-memory use.
+
+    Places the given key_points into the specified section (default OTHERS).
+    All other canonical sections are initialized as empty lists.
+    """
+    sections = {name: [] for name in SECTION_SLUGS}
+    sections[section] = key_points
+    return {"version": "1.0", "last_updated": None, "sections": sections}
+
+
 # ===========================================================================
 # REQ-SCORE-001: PlaybookEntry Schema
 # ===========================================================================
@@ -74,13 +86,9 @@ def _write_playbook_file(playbook_path, data):
 def test_contract_playbook_entry_schema(project_dir, playbook_path):
     """Contract: After save, entries conform to PlaybookEntry schema
     with {name, text, helpful, harmful} and no 'score' field."""
-    playbook = {
-        "version": "1.0",
-        "last_updated": None,
-        "key_points": [
-            {"name": "kpt_001", "text": "use types", "helpful": 3, "harmful": 1},
-        ],
-    }
+    playbook = _make_sections_playbook([
+        {"name": "kpt_001", "text": "use types", "helpful": 3, "harmful": 1},
+    ])
     save_playbook(playbook)
 
     with open(playbook_path, "r", encoding="utf-8") as f:
@@ -88,9 +96,10 @@ def test_contract_playbook_entry_schema(project_dir, playbook_path):
 
     assert "version" in saved
     assert "last_updated" in saved
-    assert "key_points" in saved
+    assert "sections" in saved
+    assert "key_points" not in saved
 
-    entry = saved["key_points"][0]
+    entry = saved["sections"]["OTHERS"][0]
     assert isinstance(entry["name"], str)
     assert isinstance(entry["text"], str)
     assert isinstance(entry["helpful"], int)
@@ -108,19 +117,15 @@ def test_contract_playbook_entry_schema(project_dir, playbook_path):
 # @tests-contract REQ-SCORE-002
 def test_contract_helpful_increment(project_dir):
     """Contract: 'helpful' rating increments helpful counter by 1."""
-    playbook = {
-        "version": "1.0",
-        "last_updated": None,
-        "key_points": [
-            {"name": "kpt_001", "text": "tip", "helpful": 3, "harmful": 1},
-        ],
-    }
+    playbook = _make_sections_playbook([
+        {"name": "kpt_001", "text": "tip", "helpful": 3, "harmful": 1},
+    ])
     extraction_result = {
         "new_key_points": [],
         "evaluations": [{"name": "kpt_001", "rating": "helpful"}],
     }
     result = update_playbook_data(playbook, extraction_result)
-    kp = result["key_points"][0]
+    kp = result["sections"]["OTHERS"][0]
     assert kp["helpful"] == 4
     assert kp["harmful"] == 1  # unchanged
 
@@ -128,19 +133,15 @@ def test_contract_helpful_increment(project_dir):
 # @tests-contract REQ-SCORE-002
 def test_contract_harmful_increment(project_dir):
     """Contract: 'harmful' rating increments harmful counter by 1."""
-    playbook = {
-        "version": "1.0",
-        "last_updated": None,
-        "key_points": [
-            {"name": "kpt_001", "text": "tip", "helpful": 3, "harmful": 1},
-        ],
-    }
+    playbook = _make_sections_playbook([
+        {"name": "kpt_001", "text": "tip", "helpful": 3, "harmful": 1},
+    ])
     extraction_result = {
         "new_key_points": [],
         "evaluations": [{"name": "kpt_001", "rating": "harmful"}],
     }
     result = update_playbook_data(playbook, extraction_result)
-    kp = result["key_points"][0]
+    kp = result["sections"]["OTHERS"][0]
     assert kp["helpful"] == 3  # unchanged
     assert kp["harmful"] == 2
 
@@ -148,19 +149,15 @@ def test_contract_harmful_increment(project_dir):
 # @tests-contract REQ-SCORE-002
 def test_contract_neutral_no_change(project_dir):
     """Contract: 'neutral' rating changes neither counter."""
-    playbook = {
-        "version": "1.0",
-        "last_updated": None,
-        "key_points": [
-            {"name": "kpt_001", "text": "tip", "helpful": 3, "harmful": 1},
-        ],
-    }
+    playbook = _make_sections_playbook([
+        {"name": "kpt_001", "text": "tip", "helpful": 3, "harmful": 1},
+    ])
     extraction_result = {
         "new_key_points": [],
         "evaluations": [{"name": "kpt_001", "rating": "neutral"}],
     }
     result = update_playbook_data(playbook, extraction_result)
-    kp = result["key_points"][0]
+    kp = result["sections"]["OTHERS"][0]
     assert kp["helpful"] == 3
     assert kp["harmful"] == 1
 
@@ -173,14 +170,10 @@ def test_contract_neutral_no_change(project_dir):
 # @tests-contract REQ-SCORE-003
 def test_contract_format_output_structure(project_dir, mock_template):
     """Contract: format_playbook outputs [name] helpful=X harmful=Y :: text format."""
-    playbook = {
-        "version": "1.0",
-        "last_updated": None,
-        "key_points": [
-            {"name": "kpt_001", "text": "use type hints", "helpful": 5, "harmful": 1},
-            {"name": "kpt_002", "text": "prefer pathlib", "helpful": 0, "harmful": 0},
-        ],
-    }
+    playbook = _make_sections_playbook([
+        {"name": "kpt_001", "text": "use type hints", "helpful": 5, "harmful": 1},
+        {"name": "kpt_002", "text": "prefer pathlib", "helpful": 0, "harmful": 0},
+    ])
     result = format_playbook(playbook)
 
     # Per contract.md: format is [name] helpful=N harmful=N :: text
@@ -194,8 +187,8 @@ def test_contract_format_output_structure(project_dir, mock_template):
 
 # @tests-contract REQ-SCORE-003
 def test_contract_format_empty_returns_empty(project_dir, mock_template):
-    """Contract: Empty key_points list -> returns empty string."""
-    playbook = {"version": "1.0", "last_updated": None, "key_points": []}
+    """Contract: Empty sections -> returns empty string."""
+    playbook = _make_sections_playbook([])
     result = format_playbook(playbook)
     assert result == ""
 
@@ -215,8 +208,11 @@ def test_contract_bare_string_migration(project_dir, playbook_path):
     })
     playbook = load_playbook()
 
-    assert len(playbook["key_points"]) == 1
-    entry = playbook["key_points"][0]
+    assert "sections" in playbook
+    assert "key_points" not in playbook
+    others = playbook["sections"]["OTHERS"]
+    assert len(others) == 1
+    entry = others[0]
 
     # Per contract.md: name is generated, text is the string, helpful=0, harmful=0
     assert isinstance(entry["name"], str)
@@ -242,7 +238,7 @@ def test_contract_dict_no_score_migration(project_dir, playbook_path):
     })
     playbook = load_playbook()
 
-    entry = playbook["key_points"][0]
+    entry = playbook["sections"]["OTHERS"][0]
     assert entry["name"] == "kpt_003"
     assert entry["text"] == "Prefer pathlib over os.path"
     assert entry["helpful"] == 0
@@ -267,7 +263,7 @@ def test_contract_dict_with_score_migration(project_dir, playbook_path):
     })
     playbook = load_playbook()
 
-    entry = playbook["key_points"][0]
+    entry = playbook["sections"]["OTHERS"][0]
     assert entry["name"] == "kpt_005"
     assert entry["text"] == "Avoid global state"
     # Per contract.md migration formula:
@@ -289,7 +285,7 @@ def test_contract_dict_with_positive_score_migration(project_dir, playbook_path)
     })
     playbook = load_playbook()
 
-    entry = playbook["key_points"][0]
+    entry = playbook["sections"]["OTHERS"][0]
     assert entry["helpful"] == 5
     assert entry["harmful"] == 0
     assert "score" not in entry
@@ -307,7 +303,7 @@ def test_contract_dict_with_zero_score_migration(project_dir, playbook_path):
     })
     playbook = load_playbook()
 
-    entry = playbook["key_points"][0]
+    entry = playbook["sections"]["OTHERS"][0]
     assert entry["helpful"] == 0
     assert entry["harmful"] == 0
     assert "score" not in entry
@@ -322,18 +318,14 @@ def test_contract_dict_with_zero_score_migration(project_dir, playbook_path):
 def test_contract_pruning_removes_harmful(project_dir):
     """Contract: Entry meeting pruning condition (harmful >= 3 AND harmful > helpful)
     is removed."""
-    playbook = {
-        "version": "1.0",
-        "last_updated": None,
-        "key_points": [
-            {"name": "kpt_001", "text": "bad advice", "helpful": 1, "harmful": 4},
-            {"name": "kpt_002", "text": "good advice", "helpful": 10, "harmful": 1},
-        ],
-    }
+    playbook = _make_sections_playbook([
+        {"name": "kpt_001", "text": "bad advice", "helpful": 1, "harmful": 4},
+        {"name": "kpt_002", "text": "good advice", "helpful": 10, "harmful": 1},
+    ])
     extraction_result = {"new_key_points": [], "evaluations": []}
     result = update_playbook_data(playbook, extraction_result)
 
-    names = [kp["name"] for kp in result["key_points"]]
+    names = [kp["name"] for kp in result["sections"]["OTHERS"]]
     assert "kpt_001" not in names  # pruned
     assert "kpt_002" in names  # retained
 
@@ -341,41 +333,33 @@ def test_contract_pruning_removes_harmful(project_dir):
 # @tests-contract REQ-SCORE-007
 def test_contract_pruning_retains_helpful(project_dir):
     """Contract: Entry with harmful >= 3 but helpful >= harmful is retained."""
-    playbook = {
-        "version": "1.0",
-        "last_updated": None,
-        "key_points": [
-            {"name": "kpt_001", "text": "controversial", "helpful": 10, "harmful": 4},
-        ],
-    }
+    playbook = _make_sections_playbook([
+        {"name": "kpt_001", "text": "controversial", "helpful": 10, "harmful": 4},
+    ])
     extraction_result = {"new_key_points": [], "evaluations": []}
     result = update_playbook_data(playbook, extraction_result)
 
-    assert len(result["key_points"]) == 1
-    assert result["key_points"][0]["name"] == "kpt_001"
+    assert len(result["sections"]["OTHERS"]) == 1
+    assert result["sections"]["OTHERS"][0]["name"] == "kpt_001"
 
 
 # @tests-contract REQ-SCORE-007
 def test_contract_pruning_decision_table(project_dir):
     """Contract: Verify the full pruning decision table from contract.md."""
-    playbook = {
-        "version": "1.0",
-        "last_updated": None,
-        "key_points": [
-            {"name": "keep_zero", "text": "a", "helpful": 0, "harmful": 0},     # No
-            {"name": "keep_below", "text": "b", "helpful": 0, "harmful": 2},     # No
-            {"name": "prune_a", "text": "c", "helpful": 0, "harmful": 3},        # Yes
-            {"name": "prune_b", "text": "d", "helpful": 1, "harmful": 4},        # Yes
-            {"name": "keep_majority", "text": "e", "helpful": 10, "harmful": 4}, # No
-            {"name": "keep_equal", "text": "f", "helpful": 3, "harmful": 3},     # No
-            {"name": "prune_c", "text": "g", "helpful": 5, "harmful": 6},        # Yes
-            {"name": "prune_d", "text": "h", "helpful": 0, "harmful": 100},      # Yes
-        ],
-    }
+    playbook = _make_sections_playbook([
+        {"name": "keep_zero", "text": "a", "helpful": 0, "harmful": 0},     # No
+        {"name": "keep_below", "text": "b", "helpful": 0, "harmful": 2},     # No
+        {"name": "prune_a", "text": "c", "helpful": 0, "harmful": 3},        # Yes
+        {"name": "prune_b", "text": "d", "helpful": 1, "harmful": 4},        # Yes
+        {"name": "keep_majority", "text": "e", "helpful": 10, "harmful": 4}, # No
+        {"name": "keep_equal", "text": "f", "helpful": 3, "harmful": 3},     # No
+        {"name": "prune_c", "text": "g", "helpful": 5, "harmful": 6},        # Yes
+        {"name": "prune_d", "text": "h", "helpful": 0, "harmful": 100},      # Yes
+    ])
     extraction_result = {"new_key_points": [], "evaluations": []}
     result = update_playbook_data(playbook, extraction_result)
 
-    surviving_names = {kp["name"] for kp in result["key_points"]}
+    surviving_names = {kp["name"] for kp in result["sections"]["OTHERS"]}
     # Should be retained
     assert "keep_zero" in surviving_names
     assert "keep_below" in surviving_names
@@ -432,10 +416,13 @@ def test_contract_full_lifecycle_mixed_migration(project_dir, playbook_path, moc
 
     # Step 2: Load (migration runs)
     playbook = load_playbook()
-    assert len(playbook["key_points"]) == 4
+    assert "sections" in playbook
+    assert "key_points" not in playbook
+    others = playbook["sections"]["OTHERS"]
+    assert len(others) == 4
 
     # Verify all entries conform to PlaybookEntry schema
-    for entry in playbook["key_points"]:
+    for entry in others:
         assert isinstance(entry["name"], str)
         assert isinstance(entry["text"], str)
         assert isinstance(entry["helpful"], int)
@@ -454,14 +441,15 @@ def test_contract_full_lifecycle_mixed_migration(project_dir, playbook_path, moc
     playbook = update_playbook_data(playbook, extraction_result)
 
     # kpt_004 should have helpful incremented
-    kpt_004 = next(kp for kp in playbook["key_points"] if kp["name"] == "kpt_004")
+    others = playbook["sections"]["OTHERS"]
+    kpt_004 = next(kp for kp in others if kp["name"] == "kpt_004")
     assert kpt_004["helpful"] == 9
 
     # New entry should be added; note kpt_003 (harmful=3, helpful=0) meets pruning
     # condition so is removed, making total = 4 (3 surviving + 1 new)
-    names = [kp["name"] for kp in playbook["key_points"]]
+    names = [kp["name"] for kp in others]
     assert "kpt_003" not in names  # pruned per pruning contract
-    new_entries = [kp for kp in playbook["key_points"] if kp["text"] == "New discovery"]
+    new_entries = [kp for kp in others if kp["text"] == "New discovery"]
     assert len(new_entries) == 1
     assert new_entries[0]["helpful"] == 0
     assert new_entries[0]["harmful"] == 0
@@ -471,10 +459,11 @@ def test_contract_full_lifecycle_mixed_migration(project_dir, playbook_path, moc
 
     # Step 5: Reload (round-trip stability)
     playbook2 = load_playbook()
-    # 4 entries survive: kpt_001, kpt_002, kpt_004, kpt_005 (new discovery)
+    others2 = playbook2["sections"]["OTHERS"]
+    # 4 entries survive: kpt_001, kpt_002, kpt_004, and the new discovery
     # kpt_003 was pruned before save
-    assert len(playbook2["key_points"]) == 4
-    for entry in playbook2["key_points"]:
+    assert len(others2) == 4
+    for entry in others2:
         assert "score" not in entry
         assert entry["helpful"] >= 0
         assert entry["harmful"] >= 0
@@ -491,7 +480,7 @@ def test_contract_full_lifecycle_mixed_migration(project_dir, playbook_path, moc
 def test_contract_full_lifecycle_round_trip(project_dir, playbook_path, mock_template):
     """Deliverable test: Full lifecycle with pruning -- write, load, update
     (with harmful ratings), save, reload, verify pruned entry is gone."""
-    # Write initial playbook with an entry near pruning threshold
+    # Write initial playbook with an entry near pruning threshold (legacy flat format)
     initial_data = {
         "version": "1.0",
         "last_updated": None,
@@ -502,9 +491,9 @@ def test_contract_full_lifecycle_round_trip(project_dir, playbook_path, mock_tem
     }
     _write_playbook_file(playbook_path, initial_data)
 
-    # Load
+    # Load (migration to sections)
     playbook = load_playbook()
-    assert len(playbook["key_points"]) == 2
+    assert len(playbook["sections"]["OTHERS"]) == 2
 
     # Update: push kpt_002 over the pruning threshold
     extraction_result = {
@@ -516,7 +505,7 @@ def test_contract_full_lifecycle_round_trip(project_dir, playbook_path, mock_tem
     playbook = update_playbook_data(playbook, extraction_result)
 
     # kpt_002 should be pruned (harmful=3 >= 3 AND harmful=3 > helpful=0)
-    names = [kp["name"] for kp in playbook["key_points"]]
+    names = [kp["name"] for kp in playbook["sections"]["OTHERS"]]
     assert "kpt_001" in names
     assert "kpt_002" not in names
 
@@ -525,7 +514,7 @@ def test_contract_full_lifecycle_round_trip(project_dir, playbook_path, mock_tem
 
     # Reload
     playbook2 = load_playbook()
-    names2 = [kp["name"] for kp in playbook2["key_points"]]
+    names2 = [kp["name"] for kp in playbook2["sections"]["OTHERS"]]
     assert "kpt_001" in names2
     assert "kpt_002" not in names2
 
@@ -538,7 +527,7 @@ def test_contract_full_lifecycle_round_trip(project_dir, playbook_path, mock_tem
 # @tests-contract REQ-SCORE-002
 def test_contract_full_lifecycle_new_keypoints(project_dir, playbook_path, mock_template):
     """Deliverable test: New key points are added, persisted, and formatted correctly."""
-    # Start with empty playbook
+    # Start with empty playbook (legacy flat format with empty key_points)
     _write_playbook_file(playbook_path, {
         "version": "1.0",
         "last_updated": None,
@@ -546,7 +535,9 @@ def test_contract_full_lifecycle_new_keypoints(project_dir, playbook_path, mock_
     })
 
     playbook = load_playbook()
-    assert playbook["key_points"] == []
+    # After migration, all sections should be empty
+    for section_entries in playbook["sections"].values():
+        assert section_entries == []
 
     # Add new key points
     extraction_result = {
@@ -554,25 +545,27 @@ def test_contract_full_lifecycle_new_keypoints(project_dir, playbook_path, mock_
         "evaluations": [],
     }
     playbook = update_playbook_data(playbook, extraction_result)
-    assert len(playbook["key_points"]) == 2
+    assert len(playbook["sections"]["OTHERS"]) == 2
 
     # Save and reload
     save_playbook(playbook)
     playbook2 = load_playbook()
-    assert len(playbook2["key_points"]) == 2
+    assert len(playbook2["sections"]["OTHERS"]) == 2
 
     # Rate them
+    others2 = playbook2["sections"]["OTHERS"]
     extraction_result2 = {
         "new_key_points": [],
         "evaluations": [
-            {"name": playbook2["key_points"][0]["name"], "rating": "helpful"},
-            {"name": playbook2["key_points"][1]["name"], "rating": "harmful"},
+            {"name": others2[0]["name"], "rating": "helpful"},
+            {"name": others2[1]["name"], "rating": "harmful"},
         ],
     }
     playbook2 = update_playbook_data(playbook2, extraction_result2)
 
-    assert playbook2["key_points"][0]["helpful"] == 1
-    assert playbook2["key_points"][1]["harmful"] == 1
+    others2 = playbook2["sections"]["OTHERS"]
+    assert others2[0]["helpful"] == 1
+    assert others2[1]["harmful"] == 1
 
     # Format
     formatted = format_playbook(playbook2)
@@ -582,13 +575,16 @@ def test_contract_full_lifecycle_new_keypoints(project_dir, playbook_path, mock_
 
 # @tests-contract REQ-SCORE-001
 def test_contract_empty_playbook_schema(project_dir):
-    """Contract: When no playbook.json exists, load returns empty playbook
-    with canonical schema."""
+    """Contract: When no playbook.json exists, load returns empty sections-based
+    playbook with canonical schema."""
     playbook = load_playbook()
     assert playbook["version"] == "1.0"
     assert playbook["last_updated"] is None
-    assert playbook["key_points"] == []
-    assert isinstance(playbook["key_points"], list)
+    assert "sections" in playbook
+    assert "key_points" not in playbook
+    for section_entries in playbook["sections"].values():
+        assert isinstance(section_entries, list)
+        assert section_entries == []
 
 
 # @tests-contract REQ-SCORE-004
@@ -608,10 +604,13 @@ def test_contract_mixed_format_migration(project_dir, playbook_path):
     })
     playbook = load_playbook()
 
-    assert len(playbook["key_points"]) == 4
+    assert "sections" in playbook
+    assert "key_points" not in playbook
+    others = playbook["sections"]["OTHERS"]
+    assert len(others) == 4
 
     # All must conform to PlaybookEntry schema
-    for entry in playbook["key_points"]:
+    for entry in others:
         assert "name" in entry
         assert "text" in entry
         assert "helpful" in entry
@@ -621,10 +620,10 @@ def test_contract_mixed_format_migration(project_dir, playbook_path):
         assert entry["harmful"] >= 0
 
     # Verify specific expected values from contract.md
-    by_name = {kp["name"]: kp for kp in playbook["key_points"]}
+    by_name = {kp["name"]: kp for kp in others}
 
     # Bare string -> generated name, helpful=0, harmful=0
-    bare_entry = playbook["key_points"][0]
+    bare_entry = others[0]
     assert bare_entry["text"] == "Use type hints"
     assert bare_entry["helpful"] == 0
     assert bare_entry["harmful"] == 0

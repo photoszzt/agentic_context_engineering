@@ -20,14 +20,23 @@ Extract key points from reasoning trajectories and evaluate existing playbook ke
    - "harmful": key point caused issues or provided wrong guidance
    - "neutral": key point was not relevant
 
+# @implements REQ-SECT-004
+# Sections
+Assign each new key point to one of these sections:
+- PATTERNS & APPROACHES: Successful solutions, design patterns, architectural decisions
+- MISTAKES TO AVOID: Failed approaches, common pitfalls, anti-patterns
+- USER PREFERENCES: User's coding style, tool preferences, workflow habits
+- PROJECT CONTEXT: Project-specific facts, architecture, dependencies, conventions
+- OTHERS: Key points that don't fit the above categories
+
 # Output Format
 {{
   "new_key_points": [
-    "First key point extracted from the reasoning trajectories",
-    "Second key point extracted from the reasoning trajectories"
+    {{"text": "First key point", "section": "PATTERNS & APPROACHES"}},
+    {{"text": "Second key point", "section": "MISTAKES TO AVOID"}}
   ],
   "evaluations": [
-    {{"name": "kpt_001", "rating": "helpful"}},
-    {{"name": "kpt_002", "rating": "neutral"}}
+    {{"name": "pat-001", "rating": "helpful"}},
+    {{"name": "kpt_001", "rating": "neutral"}}
   ]
 }}

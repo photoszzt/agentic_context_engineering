@@ -1,6 +1,11 @@
 #!/usr/bin/env python3
+# Module: common -- shared utilities for playbook lifecycle hooks.
+#
+# Spec: docs/sections/spec.md
+# Contract: docs/sections/contract.md
 import json
 import os
+import re
 from pathlib import Path
 from datetime import datetime
 
@@ -10,6 +15,18 @@ try:
     ANTHROPIC_AVAILABLE = True
 except ImportError:
     ANTHROPIC_AVAILABLE = False
+
+
+# @implements REQ-SECT-010
+# Single source of truth for canonical section names, slugs, and ordering.
+# Iteration order = canonical section order (Python 3.7+ dict insertion order).
+SECTION_SLUGS = {
+    "PATTERNS & APPROACHES": "pat",
+    "MISTAKES TO AVOID": "mis",
+    "USER PREFERENCES": "pref",
+    "PROJECT CONTEXT": "ctx",
+    "OTHERS": "oth",
+}
 
 
 def get_project_dir() -> Path:
@@ -62,7 +79,32 @@ def clear_session():
         session_file.unlink()
 
 
-def generate_keypoint_name(existing_names: set) -> str:
+def generate_keypoint_name(section_entries: list[dict], slug: str) -> str:
+    """Generate the next key point name for a section.
+
+    Scans section_entries for names matching {slug}-NNN pattern,
+    finds the highest NNN, returns {slug}-{max+1:03d}.
+
+    Legacy kpt_NNN names in section_entries are ignored.
+
+    @implements REQ-SECT-002
+    @invariant INV-SECT-005 (slug prefix consistency)
+    """
+    pattern = re.compile(rf"^{re.escape(slug)}-(\d+)$")
+    max_num = 0
+    for entry in section_entries:
+        match = pattern.match(entry.get("name", ""))
+        if match:
+            max_num = max(max_num, int(match.group(1)))
+    return f"{slug}-{max_num + 1:03d}"
+
+
+def _generate_legacy_keypoint_name(existing_names: set) -> str:
+    """Generate a legacy kpt_NNN name for migration of bare strings.
+
+    Used only during flat-to-sections migration in load_playbook().
+    Preserves the legacy naming pattern for migrated entries (contract.md).
+    """
     max_num = 0
     for name in existing_names:
         if name.startswith("kpt_"):
@@ -71,8 +113,37 @@ def generate_keypoint_name(existing_names: set) -> str:
                 max_num = max(max_num, num)
             except (IndexError, ValueError):
                 continue
-
     return f"kpt_{max_num + 1:03d}"
+
+
+def _default_playbook() -> dict:
+    """Return a default empty sections-based playbook.
+
+    @implements REQ-SECT-001
+    """
+    return {
+        "version": "1.0",
+        "last_updated": None,
+        "sections": {name: [] for name in SECTION_SLUGS},
+    }
+
+
+def _resolve_section(section_name: str) -> str:
+    """Resolve a section name via case-insensitive exact match.
+
+    Strips leading/trailing whitespace before matching.
+    Returns the canonical section name if matched, or "OTHERS" as fallback.
+
+    @implements REQ-SECT-005
+    @invariant INV-SECT-002 (section names from canonical set)
+    """
+    if not section_name or not section_name.strip():
+        return "OTHERS"
+    stripped = section_name.strip()
+    for canonical in SECTION_SLUGS:
+        if canonical.upper() == stripped.upper():
+            return canonical
+    return "OTHERS"
 
 
 def load_settings() -> dict:
@@ -90,19 +161,48 @@ def load_settings() -> dict:
 
 
 def load_playbook() -> dict:
-    # @implements REQ-SCORE-004, REQ-SCORE-005, REQ-SCORE-006
+    """Load playbook from disk, migrating flat format to sections if needed.
+
+    @implements REQ-SECT-006, REQ-SECT-007, REQ-SCORE-004, REQ-SCORE-005, REQ-SCORE-006
+    @invariant INV-SECT-001 (sections key always present)
+    @invariant INV-SECT-004 (legacy IDs preserved during migration)
+    @invariant INV-SECT-006 (migration round-trip stability)
+    @invariant INV-SECT-007 (no key_points key in output)
+    """
     playbook_path = get_project_dir() / ".claude" / "playbook.json"
 
     if not playbook_path.exists():
-        return {"version": "1.0", "last_updated": None, "key_points": []}
+        return _default_playbook()
 
     try:
         with open(playbook_path, "r", encoding="utf-8") as f:
             data = json.load(f)
 
-        if "key_points" not in data:
-            data["key_points"] = []
+        # REQ-SECT-007: Dual-key handling -- sections takes precedence
+        if "sections" in data and "key_points" in data:
+            data.pop("key_points")
+            # LOG-SECT-003: Dual-key warning diagnostic
+            if is_diagnostic_mode():
+                save_diagnostic(
+                    "Dual-key playbook.json detected: both 'sections' and 'key_points' present. "
+                    "Using 'sections', ignoring 'key_points'.",
+                    "sections_dual_key_warning"
+                )
 
+        if "sections" in data:
+            # Already migrated: ensure all 5 canonical sections exist
+            for section_name in SECTION_SLUGS:
+                if section_name not in data["sections"]:
+                    data["sections"][section_name] = []
+            # @invariant INV-SECT-007: no key_points key in output
+            data.pop("key_points", None)
+            return data
+
+        if "key_points" not in data:
+            return _default_playbook()
+
+        # REQ-SECT-006: Flat format migration to sections
+        # Apply scoring migration to each entry (same branches as scoring module)
         keypoints = []
         existing_names = set()
         migrated_entries = []
@@ -110,7 +210,8 @@ def load_playbook() -> dict:
         for item in data["key_points"]:
             if isinstance(item, str):
                 # Branch 1: Bare string (REQ-SCORE-004, SCN-SCORE-004-01)
-                name = generate_keypoint_name(existing_names)
+                # Uses legacy kpt_NNN naming during migration (contract.md)
+                name = _generate_legacy_keypoint_name(existing_names)
                 keypoints.append({"name": name, "text": item, "helpful": 0, "harmful": 0})
                 existing_names.add(name)
                 migrated_entries.append({"name": name, "from": "bare_string", "original_score": None})
@@ -118,7 +219,7 @@ def load_playbook() -> dict:
                 if "helpful" in item and "harmful" in item:
                     # Branch 0: Already migrated (no-op, keep as-is)
                     if "name" not in item:
-                        item["name"] = generate_keypoint_name(existing_names)
+                        item["name"] = _generate_legacy_keypoint_name(existing_names)
                     # Drop "score" if it somehow co-exists (defensive, SCN-SCORE-006-02)
                     item.pop("score", None)
                     existing_names.add(item["name"])
@@ -126,7 +227,7 @@ def load_playbook() -> dict:
                 elif "score" in item:
                     # Branch 3: Dict with score (REQ-SCORE-006, SCN-SCORE-006-01)
                     if "name" not in item:
-                        item["name"] = generate_keypoint_name(existing_names)
+                        item["name"] = _generate_legacy_keypoint_name(existing_names)
                     original_score = item.pop("score")
                     item["helpful"] = max(original_score, 0)
                     item["harmful"] = max(-original_score, 0)
@@ -136,7 +237,7 @@ def load_playbook() -> dict:
                 else:
                     # Branch 2: Dict without score or counters (REQ-SCORE-005, SCN-SCORE-005-01)
                     if "name" not in item:
-                        item["name"] = generate_keypoint_name(existing_names)
+                        item["name"] = _generate_legacy_keypoint_name(existing_names)
                     item["helpful"] = 0
                     item["harmful"] = 0
                     existing_names.add(item["name"])
@@ -147,7 +248,7 @@ def load_playbook() -> dict:
         # @invariant INV-SCORE-004 (no score field)
         # @invariant INV-SCORE-005 (round-trip stability: migrated entries re-load as Branch 0 no-op)
 
-        # LOG-SCORE-001: Diagnostic logging for migration
+        # LOG-SCORE-001: Diagnostic logging for scoring migration
         if migrated_entries and is_diagnostic_mode():
             migration_summary = json.dumps(migrated_entries, indent=2)
             save_diagnostic(
@@ -155,14 +256,39 @@ def load_playbook() -> dict:
                 "playbook_migration"
             )
 
-        data["key_points"] = keypoints
+        # Place ALL migrated entries into OTHERS section
+        # @invariant INV-SECT-004: Legacy IDs preserved (no renaming)
+        sections = {name: [] for name in SECTION_SLUGS}
+        sections["OTHERS"] = keypoints
+
+        # LOG-SECT-001: Sections migration diagnostic
+        if keypoints and is_diagnostic_mode():
+            save_diagnostic(
+                f"Migrated {len(keypoints)} entries from flat key_points to OTHERS section",
+                "sections_migration"
+            )
+
+        data["sections"] = sections
+        data.pop("key_points", None)
+        # @invariant INV-SECT-007: no key_points key in output
         return data
 
     except Exception:
-        return {"version": "1.0", "last_updated": None, "key_points": []}
+        return _default_playbook()
 
 
 def save_playbook(playbook: dict):
+    """Save playbook to disk.
+
+    @implements INV-SECT-001 (assertion that sections key is present)
+    @invariant INV-SECT-001 (sections key always present after write)
+    @invariant INV-SECT-007 (no key_points key in output)
+    """
+    assert "sections" in playbook, (
+        "Playbook must have 'sections' key. "
+        "Got keys: " + str(list(playbook.keys()))
+    )
+    playbook.pop("key_points", None)  # INV-SECT-007: strip legacy key if present
     playbook["last_updated"] = datetime.now().isoformat()
     playbook_path = get_project_dir() / ".claude" / "playbook.json"
 
@@ -172,37 +298,95 @@ def save_playbook(playbook: dict):
 
 
 def format_playbook(playbook: dict) -> str:
-    # @implements REQ-SCORE-003, REQ-SCORE-008
-    key_points = playbook.get("key_points", [])
-    if not key_points:
+    """Format playbook with section headers for prompt injection.
+
+    @implements REQ-SECT-003
+    """
+    sections = playbook.get("sections", {})
+
+    section_blocks = []
+    for section_name in SECTION_SLUGS:  # Canonical order
+        entries = sections.get(section_name, [])
+        if not entries:
+            continue  # Omit empty sections (SCN-SECT-003-02)
+
+        lines = [f"## {section_name}"]
+        for kp in entries:
+            lines.append(
+                f"[{kp['name']}] helpful={kp['helpful']} harmful={kp['harmful']} :: {kp['text']}"
+            )
+        section_blocks.append("\n".join(lines))
+
+    if not section_blocks:
         return ""
 
-    key_points_text = "\n".join(
-        f"[{kp['name']}] helpful={kp['helpful']} harmful={kp['harmful']} :: {kp['text']}"
-        for kp in key_points
-    )
+    key_points_text = "\n\n".join(section_blocks)
 
     template = load_template("playbook.txt")
     return template.format(key_points=key_points_text)
 
 
 def update_playbook_data(playbook: dict, extraction_result: dict) -> dict:
-    # @implements REQ-SCORE-001, REQ-SCORE-002, REQ-SCORE-007
+    """Apply new key points, evaluations, and pruning across all sections.
+
+    Signature is UNCHANGED from the scoring module -- callers must not break.
+
+    @implements REQ-SECT-005, REQ-SECT-008
+    @invariant INV-SECT-002 (section names from canonical set)
+    @invariant INV-SECT-003 (counter non-negativity)
+    @invariant INV-SECT-005 (section-slug ID prefix consistency)
+    """
     new_key_points = extraction_result.get("new_key_points", [])
     evaluations = extraction_result.get("evaluations", [])
 
-    existing_names = {kp["name"] for kp in playbook["key_points"]}
-    existing_texts = {kp["text"] for kp in playbook["key_points"]}
+    # Collect all existing texts across all sections for dedup
+    existing_texts = set()
+    for entries in playbook["sections"].values():
+        for kp in entries:
+            existing_texts.add(kp["text"])
 
-    # REQ-SCORE-001: New key points use helpful/harmful counters
-    for text in new_key_points:
-        if text and text not in existing_texts:
-            name = generate_keypoint_name(existing_names)
-            playbook["key_points"].append({"name": name, "text": text, "helpful": 0, "harmful": 0})
-            existing_names.add(name)
+    # REQ-SECT-005: New key point insertion with section resolution
+    for item in new_key_points:
+        # Backward compat: plain string -> {"text": str, "section": "OTHERS"}
+        # (SCN-SECT-004-03)
+        if isinstance(item, str):
+            text = item
+            section_name = "OTHERS"
+        elif isinstance(item, dict):
+            text = item.get("text", "")
+            raw_section = item.get("section", "") or ""
+            section_name = _resolve_section(raw_section)
+            # LOG-SECT-002: Unknown section fallback diagnostic
+            # Only emitted for non-empty strings that don't match canonical names
+            # (SCN-SECT-004-05: missing/None/empty do NOT trigger this)
+            if section_name == "OTHERS" and raw_section and raw_section.strip():
+                # Check if the resolved "OTHERS" was due to unknown name vs. explicit "OTHERS"
+                stripped_upper = raw_section.strip().upper()
+                if stripped_upper != "OTHERS":
+                    if is_diagnostic_mode():
+                        save_diagnostic(
+                            f"Unknown section '{raw_section}' for key point: \"{text[:80]}\". "
+                            f"Assigned to OTHERS.",
+                            "sections_unknown_section"
+                        )
+        else:
+            continue  # Skip invalid entry types
 
-    # REQ-SCORE-002: Counter increment per rating
-    name_to_kp = {kp["name"]: kp for kp in playbook["key_points"]}
+        if not text or text in existing_texts:
+            continue
+
+        slug = SECTION_SLUGS[section_name]
+        target_entries = playbook["sections"][section_name]
+        name = generate_keypoint_name(target_entries, slug)
+        target_entries.append({"name": name, "text": text, "helpful": 0, "harmful": 0})
+        existing_texts.add(text)
+
+    # REQ-SECT-008: Evaluations across ALL sections
+    # Build name-to-keypoint lookup across ALL sections
+    name_to_kp = {}
+    for entries in playbook["sections"].values():
+        for kp in entries:
+            name_to_kp[kp["name"]] = kp
 
     for eval_item in evaluations:
         name = eval_item.get("name", "")
@@ -215,17 +399,19 @@ def update_playbook_data(playbook: dict, extraction_result: dict) -> dict:
                 name_to_kp[name]["harmful"] += 1
             # "neutral" and unrecognized ratings: no change (SCN-SCORE-002-03, SCN-SCORE-002-04)
 
-    # REQ-SCORE-007: Pruning rule -- harmful >= 3 AND harmful > helpful
+    # REQ-SECT-008: Pruning across ALL sections
     # @invariant INV-SCORE-003: Zero-evaluation entries (helpful=0, harmful=0) are never pruned
     pruned_entries = []
-    surviving = []
-    for kp in playbook["key_points"]:
-        harmful = kp.get("harmful", 0)
-        helpful = kp.get("helpful", 0)
-        if harmful >= 3 and harmful > helpful:
-            pruned_entries.append(kp)
-        else:
-            surviving.append(kp)
+    for section_name in playbook["sections"]:
+        surviving = []
+        for kp in playbook["sections"][section_name]:
+            harmful = kp.get("harmful", 0)
+            helpful = kp.get("helpful", 0)
+            if harmful >= 3 and harmful > helpful:
+                pruned_entries.append(kp)
+            else:
+                surviving.append(kp)
+        playbook["sections"][section_name] = surviving
 
     # LOG-SCORE-002: Diagnostic logging for pruning
     if pruned_entries and is_diagnostic_mode():
@@ -240,8 +426,6 @@ def update_playbook_data(playbook: dict, extraction_result: dict) -> dict:
             f"Pruned {len(pruned_entries)} key points:\n" + "\n".join(prune_details),
             "playbook_pruning"
         )
-
-    playbook["key_points"] = surviving
 
     return playbook
 
@@ -301,6 +485,10 @@ def load_template(template_name: str) -> str:
 async def extract_keypoints(
     messages: list[dict], playbook: dict, diagnostic_name: str = "reflection"
 ) -> dict:
+    """Extract key points from reasoning trajectories via LLM.
+
+    @implements REQ-SECT-009
+    """
     if not ANTHROPIC_AVAILABLE:
         return {"new_key_points": [], "evaluations": []}
 
@@ -327,11 +515,11 @@ async def extract_keypoints(
 
     template = load_template("reflection.txt")
 
-    playbook_dict = (
-        {kp["name"]: kp["text"] for kp in playbook["key_points"]}
-        if playbook["key_points"]
-        else {}
-    )
+    # @implements REQ-SECT-009: Build flat {name: text} dict from ALL sections
+    playbook_dict = {}
+    for entries in playbook.get("sections", {}).values():
+        for kp in entries:
+            playbook_dict[kp["name"]] = kp["text"]
 
     prompt = template.format(
         trajectories=json.dumps(messages, indent=2, ensure_ascii=False),
