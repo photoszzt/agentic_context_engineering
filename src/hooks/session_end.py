@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Module: session_end -- Phase 1 ACE session-end hook.
+#
+# Spec: docs/reflector/spec.md, docs/dedup/spec.md, docs/curator/spec.md
 import json
 import sys
 import asyncio
@@ -6,8 +9,13 @@ from common import (
     load_playbook,
     save_playbook,
     load_transcript,
-    extract_keypoints,
-    update_playbook_data,
+    extract_cited_ids,
+    run_reflector,
+    apply_bullet_tags,
+    run_curator,
+    apply_structured_operations,
+    run_deduplication,
+    prune_harmful,
     clear_session,
     load_settings,
 )
@@ -37,12 +45,29 @@ async def main():
         sys.exit(0)
 
     playbook = load_playbook()
-    extraction_result = await extract_keypoints(
-        messages, playbook, "session_end_reflection"
-    )
-    playbook = update_playbook_data(playbook, extraction_result)
-    save_playbook(playbook)
 
+    # Step 5: Extract cited IDs from transcript
+    cited_ids = extract_cited_ids(messages)
+
+    # Step 6: Reflector LLM call
+    reflector_output = await run_reflector(messages, playbook, cited_ids)
+
+    # Step 7: Counter update BEFORE curator (curator sees up-to-date harm/help ratios)
+    apply_bullet_tags(playbook, reflector_output.get("bullet_tags", []))
+
+    # Step 8: Curator LLM call (works from reflector output, not transcript)
+    curator_output = await run_curator(reflector_output, playbook)
+
+    # Step 9: Apply structured operations
+    playbook = apply_structured_operations(playbook, curator_output.get("operations", []))
+
+    # Step 10: Semantic deduplication
+    playbook = run_deduplication(playbook)
+
+    # Step 11: Prune harmful entries
+    playbook = prune_harmful(playbook)
+
+    save_playbook(playbook)
     clear_session()
 
 

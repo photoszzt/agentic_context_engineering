@@ -7,13 +7,21 @@ The full intent document is in `.planning/intent.md` for historical reference.
 
 | SC-* | Success Criterion | REQ-*/SCN-*/INV-* |
 |------|-------------------|-------------------|
-| SC-CUR-001 | `extract_keypoints()` returns a structured response containing an `operations` list in addition to the existing `evaluations` field. Each operation is a dict with a `type` field (one of "ADD", "MERGE", "DELETE"). The `evaluations` field continues to exist for tagging existing bullets. | REQ-CUR-001, SCN-CUR-001-01, SCN-CUR-001-02, SCN-CUR-001-03, SCN-CUR-001-04 |
+| SC-CUR-001 | `extract_keypoints()` returns a structured response containing an `operations` list in addition to the existing `evaluations` field. Each operation is a dict with a `type` field (one of "ADD", "UPDATE", "MERGE", "DELETE"). The `evaluations` field continues to exist for tagging existing bullets. | REQ-CUR-001, SCN-CUR-001-01, SCN-CUR-001-02, SCN-CUR-001-03, SCN-CUR-001-04 |
 | SC-CUR-002 | ADD operation creates a new key point. Fields: `{"type": "ADD", "text": "...", "section": "..."}`. The `section` field is optional (defaults to "OTHERS"). `update_playbook_data()` handles ADD by generating a new ID and appending to the target section. ADD deduplicates against existing playbook texts. | REQ-CUR-002, SCN-CUR-002-01, SCN-CUR-002-02, SCN-CUR-002-03, SCN-CUR-002-04, SCN-CUR-002-05 |
 | SC-CUR-003 | MERGE operation combines two or more existing key points into one. Fields: `{"type": "MERGE", "source_ids": [...], "merged_text": "...", "section": "..."}`. Section defaults to section of first valid source_id. Counter summing. Source removal. | REQ-CUR-003, SCN-CUR-003-01, SCN-CUR-003-02, SCN-CUR-003-03, SCN-CUR-003-04, SCN-CUR-003-05, SCN-CUR-003-06, SCN-CUR-003-07, SCN-CUR-003-08 |
 | SC-CUR-004 | DELETE operation removes an existing key point. Fields: `{"type": "DELETE", "target_id": "...", "reason": "..."}`. Reason logged via OBS-CUR-003 but not stored. | REQ-CUR-004, SCN-CUR-004-01, SCN-CUR-004-02, SCN-CUR-004-03 |
 | SC-CUR-005 | Operations processed sequentially in list order. Deep copy atomicity. Exception rollback. Skip-invalid is a no-op, not an exception. | REQ-CUR-005, REQ-CUR-006, INV-CUR-001, INV-CUR-002, SCN-CUR-005-01, SCN-CUR-005-02, SCN-CUR-005-03, SCN-CUR-005-04 |
 | SC-CUR-006 | The LLM prompt instructs the LLM to return a combined JSON response containing BOTH `evaluations` AND `operations`. The prompt provides entry IDs. Includes examples of each operation type. | REQ-CUR-007, SCN-CUR-007-01 |
 | SC-CUR-007 | Precedence rule: if `operations` key present, use it exclusively (ignore `new_key_points`). If absent, fall back to `new_key_points` treating each as ADD. | REQ-CUR-008, SCN-CUR-008-01, SCN-CUR-008-02, SCN-CUR-008-03 |
+| SC-CUR-008 | **Separate Curator Role** (implements SC-ACE-004) -- `run_curator(reflector_output, playbook)` is a dedicated async LLM call that receives the reflector's analysis and the current playbook, then produces structured operations. The curator does NOT re-analyze the transcript -- it works solely from the reflector's output. On failure (API error, unparseable JSON), returns `{"reasoning": "", "operations": []}`. Uses the same retry logic as `extract_keypoints()`. Loads `curator.txt` prompt template. | REQ-CUR-010, REQ-CUR-011, REQ-CUR-012, REQ-CUR-016, SCN-CUR-010-01, SCN-CUR-010-02, SCN-CUR-010-03, SCN-CUR-011-01, SCN-CUR-012-01, SCN-CUR-016-01, SCN-CUR-016-02, INV-CUR-008 |
+| SC-CUR-009 | **UPDATE Operation** (implements SC-ACE-005) -- `{"type": "UPDATE", "target_id": "...", "text": "..."}` revises the text of an existing key point. The entry's `name` (ID) and `helpful`/`harmful` counters are preserved. If `target_id` does not exist, the UPDATE is skipped and logged. | REQ-CUR-013, SCN-CUR-013-01, SCN-CUR-013-02, SCN-CUR-013-03, SCN-CUR-013-04, INV-CUR-009 |
+| SC-CUR-010 | **apply_structured_operations()** (implements SC-ACE-005) -- A public wrapper function that applies structured curator operations to the playbook. Reuses the existing `_apply_curator_operations()` logic plus UPDATE support. Includes deep copy isolation and rollback on exception. Signature: `apply_structured_operations(playbook: dict, operations: list[dict]) -> dict`. | REQ-CUR-014, SCN-CUR-014-01, SCN-CUR-014-02, SCN-CUR-014-03, SCN-CUR-014-04, INV-CUR-010 |
+| SC-CUR-011 | **prune_harmful()** (implements SC-ACE-005) -- Standalone function extracted from `update_playbook_data()`. Removes key points where `harmful >= 3 AND harmful > helpful`. Zero-evaluation entries (helpful=0, harmful=0) are NEVER pruned (INV-SCORE-003). Thresholds identical to current implementation. | REQ-CUR-015, SCN-CUR-015-01, SCN-CUR-015-02, SCN-CUR-015-03, SCN-CUR-015-04, INV-CUR-011 |
+
+**SC-ACE-* to SC-CUR-* Mapping:**
+- SC-ACE-004 (Separate Curator Role) is implemented by SC-CUR-008
+- SC-ACE-005 (Structured Playbook Operations -- UPDATE, function extraction, prune extraction) is implemented by SC-CUR-009, SC-CUR-010, SC-CUR-011
 
 ---
 
@@ -25,7 +33,7 @@ The full intent document is in `.planning/intent.md` for historical reference.
 - **WHEN**: The response JSON contains an `operations` key
 - **THEN**:
   - The returned dict includes an `operations` field (`list[dict]`)
-  - Each operation dict has at minimum a `type` field (`str`) with value `"ADD"`, `"MERGE"`, or `"DELETE"`
+  - Each operation dict has at minimum a `type` field (`str`) with value `"ADD"`, `"UPDATE"`, `"MERGE"`, or `"DELETE"`
   - The `evaluations` field continues to be returned (unchanged from prior behavior)
   - If the LLM response does not contain an `operations` key, the returned dict does NOT include an `operations` key (the key is absent, not set to empty list). This is critical for the precedence rule in REQ-CUR-008.
   - If the LLM response contains an `operations` key but its value is NOT a list (e.g., `null`, a string, an integer), treat it as if the `operations` key were absent (do not include `operations` in the extraction result). This prevents a crash in `_apply_curator_operations()` which expects `list[dict]`. See SCN-CUR-001-04. [Resolves SPEC_CHALLENGE Q1]
@@ -113,10 +121,110 @@ The full intent document is in `.planning/intent.md` for historical reference.
   - If the list has more than 10 entries, it is truncated to the first 10 (with a diagnostic log via OBS-CUR-001 noting truncation)
   - Each operation is validated before application:
     - ADD: requires non-empty `text` (`str`); missing/empty `text` causes skip
+    - UPDATE: requires non-empty `target_id` (`str`) and non-empty `text` (`str`); missing/empty causes skip (Phase 1 addition via REQ-CUR-013)
     - MERGE: requires `source_ids` (`list[str]`) with `len >= 2` and non-empty `merged_text` (`str`); violations cause skip
     - DELETE: requires non-empty `target_id` (`str`); missing/empty causes skip
     - Unknown `type` value: operation is skipped with diagnostic log
   - Invalid operations are skipped (no-op), not raised as exceptions
+
+### REQ-CUR-010: Curator LLM Call {#REQ-CUR-010}
+- **Implements**: SC-CUR-008
+- **GIVEN**: A reflector output dict and a playbook dict
+  - The `reflector_output` dict matches the schema defined in REQ-REFL-004:
+    `{"analysis": str, "bullet_tags": list[{"name": str, "tag": "helpful"|"harmful"|"neutral", "rationale": str}]}`
+    (Cross-reference: see `docs/reflector/spec.md` REQ-REFL-004)
+  - If `reflector_output` keys are missing (e.g., due to a reflector fallback returning empty dict), the function uses `reflector_output.get("analysis", "")` and `reflector_output.get("bullet_tags", [])` with defaults
+- **WHEN**: `run_curator(reflector_output, playbook)` is called
+- **THEN**:
+  - The function loads the `curator.txt` prompt template via `load_template("curator.txt")`
+  - The function formats the playbook into prompt-friendly text via `format_playbook(playbook)` internally
+  - The function constructs an LLM prompt containing: the reflector's full JSON output and the formatted playbook
+  - The function does NOT receive or use the raw transcript -- it works solely from the reflector's output (separation of concerns: reflector diagnoses, curator decides)
+  - The function makes an async Anthropic API call with the same model, API key, and client configuration as `extract_keypoints()`
+  - The function uses the same retry logic (MAX_RETRIES=3, BASE_DELAY=2.0s, exponential backoff with jitter) as `extract_keypoints()`
+  - The function parses the LLM response JSON to extract `reasoning` (string) and `operations` (list of dicts)
+  - The function returns a dict matching the curator output schema: `{"reasoning": str, "operations": list[dict]}`
+
+### REQ-CUR-011: Curator Output Schema {#REQ-CUR-011}
+- **Implements**: SC-CUR-008
+- **GIVEN**: A successful curator LLM call that returns parseable JSON
+- **WHEN**: The response is parsed
+- **THEN**:
+  - The returned dict contains `"reasoning"` (string): curator's chain of thought explaining its decisions
+  - The returned dict contains `"operations"` (list of dicts): structured operations (ADD, UPDATE, DELETE, MERGE)
+  - Each operation follows the same schema as existing operations (REQ-CUR-002 through REQ-CUR-004, plus REQ-CUR-013 for UPDATE)
+  - The operations use the field names established in the existing codebase: `target_id` (DELETE, UPDATE), `source_ids` (MERGE), `merged_text` (MERGE), `text` (ADD, UPDATE), `section` (ADD, MERGE), `reason` (DELETE)
+  - The operations list may be empty (curator decides no changes are needed)
+
+### REQ-CUR-012: Curator Error Handling {#REQ-CUR-012}
+- **Implements**: SC-CUR-008
+- **GIVEN**: `run_curator()` encounters a failure
+- **WHEN**: The failure is an API error (timeout, connection, rate limit, 5xx, 4xx), an unparseable JSON response, or any other exception
+- **THEN**:
+  - The function returns the empty result: `{"reasoning": "", "operations": []}`
+  - The function does NOT raise an exception to the caller
+  - In diagnostic mode, the error is logged via `save_diagnostic()`
+  - The session-end flow continues with no operations (graceful degradation: playbook unchanged by curator for this session)
+
+### REQ-CUR-013: UPDATE Operation {#REQ-CUR-013}
+- **Implements**: SC-CUR-009
+- **GIVEN**: An operation `{"type": "UPDATE", "target_id": "...", "text": "..."}`
+- **WHEN**: `_apply_curator_operations()` (or `apply_structured_operations()`) processes this operation
+- **THEN**:
+  - **Validation**: If `target_id` is empty or missing, the UPDATE is skipped (validation failure)
+  - **Validation**: If `text` is empty or missing, the UPDATE is skipped (validation failure)
+  - If `target_id` does not exist in the current playbook state, the UPDATE is skipped (logged to stderr and via OBS-CUR-002 diagnostics)
+  - If `target_id` exists, the entry's `text` field is replaced with the new `text` value
+  - The entry's `name` (ID) is preserved unchanged
+  - The entry's `helpful` and `harmful` counters are preserved unchanged
+  - The entry remains in its current section (UPDATE does not move entries between sections)
+  - The operation is logged via OBS-CUR-004 diagnostics (target_id, old text truncated to 80 chars, new text truncated to 80 chars)
+
+### REQ-CUR-014: Public apply_structured_operations() Function {#REQ-CUR-014}
+- **Implements**: SC-CUR-010
+- **GIVEN**: A playbook dict and an operations list
+- **WHEN**: `apply_structured_operations(playbook, operations)` is called
+- **THEN**:
+  - The function creates a `copy.deepcopy()` of the playbook before any operations are applied (same atomicity as the operations path in `update_playbook_data()`)
+  - The function applies operations to the deep copy using the same logic as `_apply_curator_operations()`, with the addition of UPDATE support (REQ-CUR-013)
+  - Operations are processed in list order (REQ-CUR-005)
+  - Operations are truncated to 10 maximum (CON-CUR-004, INV-CUR-005)
+  - Invalid operations are skipped (INV-CUR-002)
+  - If all operations complete successfully, the modified copy is returned
+  - If an uncaught exception occurs during processing, the original unmodified playbook is returned (rollback, INV-CUR-001)
+  - Supported operation types: ADD, UPDATE, DELETE, MERGE (UPDATE is NEW; the other three are existing)
+  - **Empty operations list**: If `operations` is an empty list `[]`, the function returns the original playbook dict UNMODIFIED (no deep copy, no mutations). This matches the behavior established in REQ-CUR-006 for `update_playbook_data()`. An empty operations list is a no-op with zero overhead.
+  - This function is publicly callable (not prefixed with `_`) and is the intended interface for the session-end flow after Phase 1
+
+### REQ-CUR-015: Standalone prune_harmful() Function {#REQ-CUR-015}
+- **Implements**: SC-CUR-011
+- **GIVEN**: A playbook dict with key points distributed across sections
+- **WHEN**: `prune_harmful(playbook)` is called
+- **THEN**:
+  - The function iterates ALL sections in the playbook
+  - A key point is pruned if BOTH conditions hold:
+    - `harmful >= 3`
+    - `harmful > helpful`
+  - Zero-evaluation entries (`helpful == 0` AND `harmful == 0`) are NEVER pruned (INV-SCORE-003)
+  - Pruned entries are removed from their respective sections
+  - Pruned entries are logged to stderr with name, text preview (truncated to 80 chars), and counters
+  - In diagnostic mode, a detailed prune report is saved via `save_diagnostic()`
+  - The pruning thresholds and logic are identical to the existing pruning code in `update_playbook_data()` (lines 641-667 of current `common.py`)
+  - Returns the modified playbook dict
+
+### REQ-CUR-016: Robust JSON Extraction from LLM Response {#REQ-CUR-016}
+- **Implements**: SC-CUR-008 (JSON Parsing Robustness, see `.planning/intent.md`)
+- **GIVEN**: The LLM response from the curator call is a text string that may contain JSON embedded in prose, code fences, or be raw JSON
+- **WHEN**: `run_curator()` parses the response
+- **THEN**:
+  - The function attempts JSON extraction in this order:
+    1. Look for ` ```json...``` ` code fence; extract content between fences
+    2. Look for ` ```...``` ` code fence (no language tag); extract content
+    3. Use balanced-brace counting: find the outermost `{` and scan forward counting braces, stopping at the matching `}`. Extract that substring.
+    4. Attempt `json.loads()` on the full response text (raw parse)
+  - The FIRST strategy that produces valid JSON (parseable by `json.loads()`) is used
+  - If no strategy succeeds, `run_curator()` returns the fallback result `{"reasoning": "", "operations": []}` (per REQ-CUR-012)
+  - If a strategy produces valid JSON but the result does not have `reasoning` or `operations` keys, the function uses `.get()` with defaults (empty string, empty list) -- the partial result is accepted, not rejected
 
 ---
 
@@ -463,13 +571,198 @@ The full intent document is in `.planning/intent.md` for historical reference.
 ### SCN-CUR-009-02: Unknown or Missing Operation Type Skipped {#SCN-CUR-009-02}
 - **Implements**: REQ-CUR-009
 - **GIVEN**: Two operations:
-  - (a) `{"type": "UPDATE", "target_id": "pat-001", "text": "rewritten"}` (unknown type string)
+  - (a) `{"type": "REPLACE", "target_id": "pat-001", "text": "rewritten"}` (unknown type string)
   - (b) `{"target_id": "pat-001", "text": "rewritten"}` (no `type` key at all)
 - **WHEN**: Each operation is validated
 - **THEN**:
-  - (a) is skipped with a diagnostic log (unknown type `"UPDATE"`)
-  - (b) is skipped with a diagnostic log (unknown type `""` -- `op.get("type", "")` returns empty string when key is absent, which does not match `"ADD"`, `"MERGE"`, or `"DELETE"`)
-- **NOTE**: Both cases fall through to the `else` branch in the operation dispatch. The `op.get("type", "")` pattern means a missing `type` key defaults to empty string, which is treated as an unknown type. [Resolves SPEC_CHALLENGE Q12]
+  - (a) is skipped with a diagnostic log (unknown type `"REPLACE"`)
+  - (b) is skipped with a diagnostic log (unknown type `""` -- `op.get("type", "")` returns empty string when key is absent, which does not match `"ADD"`, `"UPDATE"`, `"MERGE"`, or `"DELETE"`)
+- **NOTE**: Both cases fall through to the `else` branch in the operation dispatch. The `op.get("type", "")` pattern means a missing `type` key defaults to empty string, which is treated as an unknown type. Recognized types are: `"ADD"`, `"UPDATE"`, `"MERGE"`, `"DELETE"`. [Resolves SPEC_CHALLENGE Q12]
+
+### SCN-CUR-010-01: Curator Produces Reasoning and Operations {#SCN-CUR-010-01}
+- **Implements**: REQ-CUR-010, REQ-CUR-011
+- **GIVEN**: A reflector output:
+  ```json
+  {
+    "analysis": "The session showed poor error handling. pat-001 was not applied.",
+    "bullet_tags": [
+      {"name": "pat-001", "tag": "harmful", "rationale": "Error handling advice was ignored"}
+    ]
+  }
+  ```
+- **AND**: A playbook with entries including `pat-001`
+- **WHEN**: `run_curator(reflector_output, playbook)` is called and the LLM returns:
+  ```json
+  {
+    "reasoning": "pat-001 has been tagged harmful repeatedly. The advice may need updating.",
+    "operations": [
+      {"type": "UPDATE", "target_id": "pat-001", "text": "Use structured error handling with try/except blocks and specific exception types"}
+    ]
+  }
+  ```
+- **THEN**: The function returns the parsed dict with `reasoning` and `operations` fields intact
+
+### SCN-CUR-010-02: Curator API Error Returns Empty Result {#SCN-CUR-010-02}
+- **Implements**: REQ-CUR-012
+- **GIVEN**: The Anthropic API is unreachable and all retries are exhausted
+- **WHEN**: `run_curator(reflector_output, playbook)` is called
+- **THEN**: Returns `{"reasoning": "", "operations": []}` without raising an exception
+
+### SCN-CUR-010-03: Curator with Empty Reflector Output {#SCN-CUR-010-03}
+- **Implements**: REQ-CUR-010
+- **GIVEN**: A reflector output `{"analysis": "", "bullet_tags": []}` (reflector failed or no analysis)
+- **AND**: A playbook with entries
+- **WHEN**: `run_curator(reflector_output, playbook)` is called
+- **THEN**: The function still returns a valid `{"reasoning": str, "operations": list}` result; the curator may produce zero operations if the reflector output is empty
+
+### SCN-CUR-011-01: Curator Prompt Template Structure {#SCN-CUR-011-01}
+- **Implements**: REQ-CUR-010
+- **GIVEN**: The `curator.txt` prompt template
+- **WHEN**: The template content is inspected
+- **THEN**:
+  - The template includes placeholders for the reflector's output and the formatted playbook
+  - The template instructs the LLM to produce a JSON response with `"reasoning"` and `"operations"` keys
+  - The template includes examples of ADD, UPDATE, DELETE, and MERGE operations using the correct field names (`target_id`, `source_ids`, `merged_text`)
+  - The template explicitly states a maximum of 10 operations
+  - The template states the LLM may return `"operations": []` if no changes are needed
+  - The template does NOT include the raw transcript (the curator works from reflector output only)
+
+### SCN-CUR-012-01: Curator Unparseable JSON Returns Empty Result {#SCN-CUR-012-01}
+- **Implements**: REQ-CUR-012
+- **GIVEN**: The LLM returns a response that cannot be parsed as JSON
+- **WHEN**: `run_curator(reflector_output, playbook)` processes the response
+- **THEN**: Returns `{"reasoning": "", "operations": []}` without raising an exception
+
+### SCN-CUR-013-01: UPDATE Revises Entry Text {#SCN-CUR-013-01}
+- **Implements**: REQ-CUR-013
+- **GIVEN**: A playbook with PATTERNS & APPROACHES: `[{name: "pat-001", text: "use type hints", helpful: 5, harmful: 1}]`
+- **AND**: An operation `{"type": "UPDATE", "target_id": "pat-001", "text": "use type hints for all function parameters and return values"}`
+- **WHEN**: The operation is applied
+- **THEN**:
+  - `pat-001` text is now `"use type hints for all function parameters and return values"`
+  - `pat-001` name is still `"pat-001"` (preserved)
+  - `pat-001` counters are still `helpful=5, harmful=1` (preserved)
+  - `pat-001` remains in PATTERNS & APPROACHES (not moved)
+
+### SCN-CUR-013-02: UPDATE Skips Non-Existent target_id {#SCN-CUR-013-02}
+- **Implements**: REQ-CUR-013
+- **GIVEN**: A playbook with no entry named `"pat-999"`
+- **AND**: An operation `{"type": "UPDATE", "target_id": "pat-999", "text": "new text"}`
+- **WHEN**: The operation is applied
+- **THEN**:
+  - The operation is skipped (target_id not found)
+  - A log message is emitted to stderr noting the non-existent ID
+  - OBS-CUR-002 diagnostic is logged (in diagnostic mode)
+  - No entries are modified
+
+### SCN-CUR-013-03: UPDATE Skips Empty target_id {#SCN-CUR-013-03}
+- **Implements**: REQ-CUR-013
+- **GIVEN**: An operation `{"type": "UPDATE", "target_id": "", "text": "new text"}`
+- **WHEN**: The operation is validated
+- **THEN**: The operation is skipped (validation failure: empty target_id)
+
+### SCN-CUR-013-04: UPDATE Skips Empty Text {#SCN-CUR-013-04}
+- **Implements**: REQ-CUR-013
+- **GIVEN**: A playbook with PATTERNS & APPROACHES: `[{name: "pat-001", text: "use type hints", helpful: 5, harmful: 1}]`
+- **AND**: An operation `{"type": "UPDATE", "target_id": "pat-001", "text": ""}`
+- **WHEN**: The operation is validated
+- **THEN**: The operation is skipped (validation failure: empty text); `pat-001` retains its original text
+
+### SCN-CUR-014-01: apply_structured_operations Applies Operations with Deep Copy {#SCN-CUR-014-01}
+- **Implements**: REQ-CUR-014
+- **GIVEN**: A playbook with PATTERNS & APPROACHES: `[{name: "pat-001", text: "A", helpful: 5, harmful: 1}]`
+- **AND**: Operations: `[{"type": "ADD", "text": "new insight", "section": "OTHERS"}]`
+- **WHEN**: `apply_structured_operations(playbook, operations)` is called
+- **THEN**:
+  - The returned playbook has the ADD applied (new entry in OTHERS)
+  - The original `playbook` dict passed in is NOT mutated (deep copy isolation)
+
+### SCN-CUR-014-02: apply_structured_operations Rollback on Exception {#SCN-CUR-014-02}
+- **Implements**: REQ-CUR-014
+- **GIVEN**: A playbook with PATTERNS & APPROACHES: `[{name: "pat-001", text: "A", helpful: 5, harmful: 1}]`
+- **AND**: `_apply_curator_operations` is monkeypatched to raise `RuntimeError("injected failure")`
+- **WHEN**: `apply_structured_operations(playbook, operations)` is called
+- **THEN**: The original playbook is returned unchanged (rollback on exception)
+
+### SCN-CUR-014-03: apply_structured_operations Supports UPDATE {#SCN-CUR-014-03}
+- **Implements**: REQ-CUR-014, REQ-CUR-013
+- **GIVEN**: A playbook with PATTERNS & APPROACHES: `[{name: "pat-001", text: "old text", helpful: 3, harmful: 0}]`
+- **AND**: Operations: `[{"type": "UPDATE", "target_id": "pat-001", "text": "revised text"}]`
+- **WHEN**: `apply_structured_operations(playbook, operations)` is called
+- **THEN**: The returned playbook has `pat-001.text == "revised text"` with counters preserved (`helpful=3, harmful=0`)
+
+### SCN-CUR-014-04: Empty Operations List Returns Original Playbook Reference Unmodified {#SCN-CUR-014-04}
+- **Implements**: REQ-CUR-014
+- **GIVEN**: A playbook with PATTERNS & APPROACHES: `[{name: "pat-001", text: "A", helpful: 5, harmful: 1}]`
+- **AND**: Operations: `[]` (empty list)
+- **WHEN**: `apply_structured_operations(playbook, [])` is called
+- **THEN**:
+  - The returned playbook is the SAME reference as the input (no deep copy created)
+  - The playbook is unmodified: `pat-001` still exists with `helpful=5, harmful=1`
+  - No operations processing occurs (zero overhead)
+- **NOTE**: This is the no-op fast path. An empty operations list requires no deep copy, no try/except, and no iteration. The function returns the original playbook immediately.
+
+### SCN-CUR-015-01: prune_harmful Removes Entries Meeting Threshold {#SCN-CUR-015-01}
+- **Implements**: REQ-CUR-015
+- **GIVEN**: A playbook with:
+  - MISTAKES TO AVOID: `[{name: "mis-001", text: "bad advice", helpful: 1, harmful: 4}]`
+  - OTHERS: `[{name: "oth-001", text: "good tip", helpful: 5, harmful: 0}]`
+- **WHEN**: `prune_harmful(playbook)` is called
+- **THEN**:
+  - `mis-001` is removed (harmful=4 >= 3 AND harmful=4 > helpful=1)
+  - `oth-001` is retained (harmful=0, does not meet threshold)
+
+### SCN-CUR-015-02: prune_harmful Preserves Zero-Evaluation Entries {#SCN-CUR-015-02}
+- **Implements**: REQ-CUR-015
+- **GIVEN**: A playbook with OTHERS: `[{name: "oth-001", text: "new entry", helpful: 0, harmful: 0}]`
+- **WHEN**: `prune_harmful(playbook)` is called
+- **THEN**: `oth-001` is retained (zero evaluations: harmful=0 < 3, so first condition fails)
+
+### SCN-CUR-015-03: prune_harmful Equal Counters Not Pruned {#SCN-CUR-015-03}
+- **Implements**: REQ-CUR-015
+- **GIVEN**: A playbook with PATTERNS & APPROACHES: `[{name: "pat-001", text: "controversial", helpful: 3, harmful: 3}]`
+- **WHEN**: `prune_harmful(playbook)` is called
+- **THEN**: `pat-001` is retained (harmful=3 >= 3 is TRUE, but harmful=3 > helpful=3 is FALSE -- equal, not greater)
+
+### SCN-CUR-015-04: prune_harmful Logs Pruned Entries {#SCN-CUR-015-04}
+- **Implements**: REQ-CUR-015
+- **GIVEN**: A playbook with MISTAKES TO AVOID: `[{name: "mis-001", text: "bad advice that is very long and should be truncated in the log output", helpful: 0, harmful: 5}]`
+- **WHEN**: `prune_harmful(playbook)` is called
+- **THEN**:
+  - `mis-001` is pruned
+  - A log message is emitted to stderr with the entry's name, truncated text, and counters
+  - In diagnostic mode, `save_diagnostic()` is called with the prune details
+
+### SCN-CUR-016-01: Curator LLM Returns JSON in Prose; Balanced-Brace Extraction Succeeds {#SCN-CUR-016-01}
+- **Implements**: REQ-CUR-016
+- **GIVEN**: The curator LLM returns a response like:
+  ```
+  Here is my analysis of the playbook:
+
+  {"reasoning": "pat-001 has been harmful", "operations": [{"type": "DELETE", "target_id": "pat-001", "reason": "consistently harmful"}]}
+
+  I hope this helps improve the playbook.
+  ```
+- **WHEN**: `run_curator()` parses the response
+- **THEN**:
+  - Code fence extraction (strategies 1 and 2) fails (no code fences present)
+  - Balanced-brace counting (strategy 3) finds the outermost `{` and scans forward, matching braces to extract the JSON object
+  - The extracted JSON is parsed successfully by `json.loads()`
+  - The function returns `{"reasoning": "pat-001 has been harmful", "operations": [{"type": "DELETE", "target_id": "pat-001", "reason": "consistently harmful"}]}`
+
+### SCN-CUR-016-02: Curator LLM Returns JSON Code Fence; Fence Extraction Succeeds {#SCN-CUR-016-02}
+- **Implements**: REQ-CUR-016
+- **GIVEN**: The curator LLM returns a response like:
+  ````
+  ```json
+  {"reasoning": "No changes needed", "operations": []}
+  ```
+  ````
+- **WHEN**: `run_curator()` parses the response
+- **THEN**:
+  - Code fence extraction (strategy 1) succeeds: content between ` ```json ` and ` ``` ` is extracted
+  - The extracted JSON is parsed successfully by `json.loads()`
+  - The function returns `{"reasoning": "No changes needed", "operations": []}`
 
 ---
 
@@ -507,13 +800,39 @@ The full intent document is in `.planning/intent.md` for historical reference.
 - **Statement**: In a single `update_playbook_data()` call, entries are added either via the `operations` path (ADD operations) or via the `new_key_points` path, never both.
 - **Enforced by**: The `operations` key check at the beginning of `update_playbook_data()` branches exclusively: if `"operations" in extraction_result`, the operations path runs and `new_key_points` is not consulted (REQ-CUR-008).
 
+### INV-CUR-007: UPDATE Preserves Entry Identity {#INV-CUR-007}
+- **Implements**: SC-CUR-009
+- **Statement**: An UPDATE operation modifies ONLY the `text` field of the target entry. The entry's `name` (ID), `helpful` counter, `harmful` counter, and section placement are preserved unchanged.
+- **Enforced by**: The UPDATE handler in `_apply_curator_operations()` (or `apply_structured_operations()`) sets only `entry["text"] = new_text` after locating the entry. No other fields are modified.
+
+### INV-CUR-008: Curator Never Raises to Caller {#INV-CUR-008}
+- **Implements**: SC-CUR-008, FM-ACE-001
+- **Statement**: `run_curator()` never raises an exception to its caller. All failure modes (API errors, JSON parse errors, unexpected exceptions) are caught internally and result in the empty return value `{"reasoning": "", "operations": []}`.
+- **Enforced by**: A top-level try/except in `run_curator()` that catches `Exception` and returns the empty result. Specific error types (API errors) are handled first for proper retry logic; the outer catch is a defensive fallback.
+
+### INV-CUR-009: UPDATE Validates Both Fields {#INV-CUR-009}
+- **Implements**: SC-CUR-009
+- **Statement**: An UPDATE operation is skipped (validation failure) if EITHER `target_id` is empty/missing OR `text` is empty/missing. Both fields are required for a valid UPDATE.
+- **Enforced by**: Validation checks at the top of the UPDATE handler: `if not target_id or not text: skip`.
+
+### INV-CUR-010: apply_structured_operations Deep Copy Isolation {#INV-CUR-010}
+- **Implements**: SC-CUR-010
+- **Statement**: `apply_structured_operations()` creates a `copy.deepcopy()` of the playbook before processing operations. The original playbook reference is never mutated. On exception, the original is returned unchanged.
+- **Enforced by**: Same deep copy + try/except pattern as the operations path in `update_playbook_data()` (REQ-CUR-006), but as a standalone public function.
+
+### INV-CUR-011: prune_harmful Thresholds Identical to Baseline {#INV-CUR-011}
+- **Implements**: SC-CUR-011
+- **Statement**: `prune_harmful()` uses exactly the same pruning conditions as the pruning logic in `update_playbook_data()`: `harmful >= 3 AND harmful > helpful`. The thresholds are NOT configurable and MUST NOT differ from the baseline.
+- **Enforced by**: The function body uses the same conditional expression. Tests verify the decision table (see Pruning Contract below).
+
 ---
 
 ## Pruning Interaction Note
 
-After curator operations are applied, the existing pruning logic (`harmful >= 3 AND harmful > helpful`) still runs as the final step of `update_playbook_data()`. This means:
+After curator operations are applied, pruning (`harmful >= 3 AND harmful > helpful`) runs as the final step. In the baseline flow, this is the pruning code within `update_playbook_data()`. In the Phase 1 flow, this is the standalone `prune_harmful()` function (REQ-CUR-015). The logic and thresholds are identical (INV-CUR-011). This means:
 - A merged entry whose summed counters exceed the pruning threshold will be pruned in the same cycle
 - A newly ADDed entry (with `helpful=0, harmful=0`) will never be pruned (INV-SCORE-003)
+- An UPDATEd entry retains its counters; if those counters already exceeded the pruning threshold before the UPDATE, the entry will still be pruned after the UPDATE
 - This is intentional -- pruning is a safety net that runs regardless of how entries were created or modified
 
 ---
@@ -526,4 +845,7 @@ After curator operations are applied, the existing pruning logic (`harmful >= 3 
 | CON-CUR-002 | No new dependencies; `update_playbook_data()` signature unchanged | REQ-CUR-006 (signature), all REQ-CUR-* (implementation in common.py) |
 | CON-CUR-003 | Non-existent ID references silently skipped | REQ-CUR-003 (MERGE filtering), REQ-CUR-004 (DELETE skip), INV-CUR-002 |
 | CON-CUR-004 | Max 10 operations per cycle (code-enforced) | REQ-CUR-009, INV-CUR-005 |
-| CON-CUR-005 | Atomicity via `copy.deepcopy()` | REQ-CUR-006, INV-CUR-001 |
+| CON-CUR-005 | Atomicity via `copy.deepcopy()` | REQ-CUR-006, INV-CUR-001, REQ-CUR-014, INV-CUR-010 |
+| CON-CUR-006 | Curator does not re-analyze transcript; works from reflector output only | REQ-CUR-010 |
+| CON-CUR-007 | UPDATE preserves entry identity (name, counters, section) | REQ-CUR-013, INV-CUR-007 |
+| CON-CUR-008 | prune_harmful() thresholds identical to baseline pruning logic | REQ-CUR-015, INV-CUR-011 |

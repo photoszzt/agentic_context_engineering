@@ -1,0 +1,51 @@
+# Reflector
+
+You are analyzing a coding session transcript to evaluate how well the existing playbook key points served the user.
+
+# Session Transcript
+{transcript}
+
+# Current Playbook
+{playbook}
+
+# Cited Key Point IDs
+{cited_ids}
+
+# Instructions
+
+Analyze the session transcript and evaluate each relevant key point in the playbook.
+
+If cited key point IDs are provided (non-empty list above), focus your analysis on those cited key points first -- they were explicitly referenced during the session. Tag each cited key point based on whether its application was helpful, harmful, or neutral. You may also tag other key points that were relevant but not explicitly cited.
+
+If no cited key point IDs are provided (empty list), analyze the full transcript and playbook. Tag key points based on whether the session transcript provides evidence of their helpfulness or harmfulness. A key point is "helpful" if the session shows it guided the assistant toward a good outcome. A key point is "harmful" if it led to incorrect advice or a bad approach. A key point is "neutral" if it was not relevant to this session.
+
+For each tagged key point, use the `name` field from the playbook entry (e.g., "pat-001", "mis-002") as the identifier.
+
+# Output Format
+
+Return a JSON object with two keys:
+
+- `"analysis"`: A brief textual summary of what went well and what went poorly in the session.
+- `"bullet_tags"`: A list of per-key-point tags. Each entry has:
+  - `"name"`: The key point ID (e.g., "pat-001") -- this is the `name` field from the playbook, NOT an arbitrary ID.
+  - `"tag"`: One of "helpful", "harmful", or "neutral".
+  - `"rationale"`: A brief explanation of why this tag was assigned.
+
+Example output:
+```json
+{{
+  "analysis": "The session showed good use of type hints as recommended. Error handling could be improved.",
+  "bullet_tags": [
+    {{"name": "pat-001", "tag": "helpful", "rationale": "Type hints were applied correctly throughout the refactoring."}},
+    {{"name": "mis-002", "tag": "harmful", "rationale": "The advice to avoid try/except led to unhandled exceptions."}},
+    {{"name": "pref-001", "tag": "neutral", "rationale": "Editor preferences were not relevant to this session."}}
+  ]
+}}
+```
+
+If no key points are relevant or the playbook is empty, return:
+```json
+{{"analysis": "No significant observations.", "bullet_tags": []}}
+```
+
+Return ONLY the JSON object. Do not include any other text outside the JSON.

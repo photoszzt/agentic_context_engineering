@@ -9,3 +9,5 @@ The following key points were learned from previous sessions. Each entry shows h
 {key_points}
 
 Use these key points to improve your responses, weighing them by their track record shown above.
+
+When a key point from the playbook influences your response, cite its ID in your reasoning using bracket notation, e.g. [pat-001]. This helps the reflection system track which key points are actively being used.
