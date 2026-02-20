@@ -1085,7 +1085,7 @@ class TestRunReflector(unittest.TestCase):
     def _setup_anthropic_mock(self):
         """Ensure common.anthropic attribute exists for patching."""
         if not hasattr(common, 'anthropic'):
-            common.anthropic = MagicMock()
+            setattr(common, 'anthropic', MagicMock())
             self._created_anthropic = True
         else:
             self._created_anthropic = False
@@ -1112,7 +1112,7 @@ class TestRunReflector(unittest.TestCase):
                  patch("common.load_template", return_value="{transcript}\n{playbook}\n{cited_ids}"), \
                  patch("common.format_playbook", return_value="formatted"), \
                  patch("time.sleep"), \
-                 patch.object(common.anthropic, 'Anthropic', return_value=mock_client), \
+                 patch.object(getattr(common, 'anthropic'), 'Anthropic', return_value=mock_client), \
                  patch.dict(os.environ, {"AGENTIC_CONTEXT_API_KEY": "test-key", "AGENTIC_CONTEXT_MODEL": "test-model"}):
                 result = _run_async(run_reflector(messages, playbook, []))
 
@@ -1137,7 +1137,7 @@ class TestRunReflector(unittest.TestCase):
                  patch("common.is_diagnostic_mode", return_value=False), \
                  patch("common.load_template", return_value="{transcript}\n{playbook}\n{cited_ids}"), \
                  patch("common.format_playbook", return_value="formatted"), \
-                 patch.object(common.anthropic, 'Anthropic', return_value=mock_client), \
+                 patch.object(getattr(common, 'anthropic'), 'Anthropic', return_value=mock_client), \
                  patch.dict(os.environ, {"AGENTIC_CONTEXT_API_KEY": "test-key", "AGENTIC_CONTEXT_MODEL": "test-model"}):
                 result = _run_async(run_reflector(messages, playbook, []))
 
@@ -1175,7 +1175,7 @@ class TestRunReflector(unittest.TestCase):
                  patch("common.is_diagnostic_mode", return_value=False), \
                  patch("common.load_template", return_value="{transcript}\n{playbook}\n{cited_ids}"), \
                  patch("common.format_playbook", return_value="formatted"), \
-                 patch.object(common.anthropic, 'Anthropic', return_value=mock_client), \
+                 patch.object(getattr(common, 'anthropic'), 'Anthropic', return_value=mock_client), \
                  patch.dict(os.environ, {"AGENTIC_CONTEXT_API_KEY": "test-key", "AGENTIC_CONTEXT_MODEL": "test-model"}):
                 result = _run_async(run_reflector(messages, playbook, []))
 
@@ -1197,7 +1197,7 @@ class TestRunCurator(unittest.TestCase):
     def _setup_anthropic_mock(self):
         """Ensure common.anthropic attribute exists for patching."""
         if not hasattr(common, 'anthropic'):
-            common.anthropic = MagicMock()
+            setattr(common, 'anthropic', MagicMock())
             self._created_anthropic = True
         else:
             self._created_anthropic = False
@@ -1224,7 +1224,7 @@ class TestRunCurator(unittest.TestCase):
                  patch("common.load_template", return_value="{reflector_output}\n{playbook}"), \
                  patch("common.format_playbook", return_value="formatted"), \
                  patch("time.sleep"), \
-                 patch.object(common.anthropic, 'Anthropic', return_value=mock_client), \
+                 patch.object(getattr(common, 'anthropic'), 'Anthropic', return_value=mock_client), \
                  patch.dict(os.environ, {"AGENTIC_CONTEXT_API_KEY": "test-key", "AGENTIC_CONTEXT_MODEL": "test-model"}):
                 result = _run_async(run_curator(reflector_output, playbook))
 
@@ -1249,7 +1249,7 @@ class TestRunCurator(unittest.TestCase):
                  patch("common.is_diagnostic_mode", return_value=False), \
                  patch("common.load_template", return_value="{reflector_output}\n{playbook}"), \
                  patch("common.format_playbook", return_value="formatted"), \
-                 patch.object(common.anthropic, 'Anthropic', return_value=mock_client), \
+                 patch.object(getattr(common, 'anthropic'), 'Anthropic', return_value=mock_client), \
                  patch.dict(os.environ, {"AGENTIC_CONTEXT_API_KEY": "test-key", "AGENTIC_CONTEXT_MODEL": "test-model"}):
                 result = _run_async(run_curator(reflector_output, playbook))
 
@@ -1287,7 +1287,7 @@ class TestRunCurator(unittest.TestCase):
                  patch("common.is_diagnostic_mode", return_value=False), \
                  patch("common.load_template", return_value="{reflector_output}\n{playbook}"), \
                  patch("common.format_playbook", return_value="formatted"), \
-                 patch.object(common.anthropic, 'Anthropic', return_value=mock_client), \
+                 patch.object(getattr(common, 'anthropic'), 'Anthropic', return_value=mock_client), \
                  patch.dict(os.environ, {"AGENTIC_CONTEXT_API_KEY": "test-key", "AGENTIC_CONTEXT_MODEL": "test-model"}):
                 result = _run_async(run_curator(reflector_output, playbook))
 
@@ -1891,7 +1891,7 @@ class TestExtractKeypointsOperations(unittest.TestCase):
     def _setup_anthropic_mock(self):
         """Ensure common.anthropic attribute exists for patching."""
         if not hasattr(common, 'anthropic'):
-            common.anthropic = MagicMock()
+            setattr(common, 'anthropic', MagicMock())
             self._created_anthropic = True
         else:
             self._created_anthropic = False
@@ -1915,7 +1915,7 @@ class TestExtractKeypointsOperations(unittest.TestCase):
             with patch.object(common, 'ANTHROPIC_AVAILABLE', True), \
                  patch("common.is_diagnostic_mode", return_value=False), \
                  patch("common.load_template", return_value="{trajectories}\n{playbook}"), \
-                 patch.object(common.anthropic, 'Anthropic', return_value=mock_client), \
+                 patch.object(getattr(common, 'anthropic'), 'Anthropic', return_value=mock_client), \
                  patch.dict(os.environ, {"AGENTIC_CONTEXT_API_KEY": "test-key", "AGENTIC_CONTEXT_MODEL": "test-model"}):
                 result = _run_async(extract_keypoints(messages, playbook, "test"))
             return result
@@ -2264,7 +2264,7 @@ class TestRunCuratorAdditional(unittest.TestCase):
 
     def _setup_anthropic_mock(self):
         if not hasattr(common, 'anthropic'):
-            common.anthropic = MagicMock()
+            setattr(common, 'anthropic', MagicMock())
             self._created_anthropic = True
         else:
             self._created_anthropic = False
@@ -2297,7 +2297,7 @@ class TestRunCuratorAdditional(unittest.TestCase):
                  patch("common.is_diagnostic_mode", return_value=False), \
                  patch("common.load_template", return_value="{reflector_output}\n{playbook}"), \
                  patch("common.format_playbook", return_value="formatted"), \
-                 patch.object(common.anthropic, 'Anthropic', return_value=mock_client), \
+                 patch.object(getattr(common, 'anthropic'), 'Anthropic', return_value=mock_client), \
                  patch.dict(os.environ, {"AGENTIC_CONTEXT_API_KEY": "test-key", "AGENTIC_CONTEXT_MODEL": "test-model"}):
                 result = _run_async(run_curator(reflector_output, playbook))
 
@@ -2372,7 +2372,7 @@ class TestPipelineIntegration(unittest.TestCase):
                 {"name": "oth-001", "tag": "harmful", "rationale": "Led to confusion"},
             ],
         }
-        apply_bullet_tags(playbook, reflector_output.get("bullet_tags", []))
+        apply_bullet_tags(playbook, reflector_output.get("bullet_tags", []))  # type: ignore[arg-type]
         assert playbook["sections"]["PATTERNS & APPROACHES"][0]["helpful"] == 3
         assert playbook["sections"]["OTHERS"][0]["harmful"] == 5
 
@@ -2383,7 +2383,7 @@ class TestPipelineIntegration(unittest.TestCase):
                 {"type": "UPDATE", "target_id": "pat-001", "text": "always use complete type hints"},
             ],
         }
-        playbook = apply_structured_operations(playbook, curator_output.get("operations", []))
+        playbook = apply_structured_operations(playbook, curator_output.get("operations", []))  # type: ignore[arg-type]
         assert playbook["sections"]["PATTERNS & APPROACHES"][0]["text"] == "always use complete type hints"
         assert playbook["sections"]["PATTERNS & APPROACHES"][0]["helpful"] == 3
 
@@ -2424,12 +2424,12 @@ class TestPipelineIntegration(unittest.TestCase):
                 {"name": "pat-001", "tag": "helpful", "rationale": "Applied correctly"},
             ],
         }
-        apply_bullet_tags(playbook, reflector_output.get("bullet_tags", []))
+        apply_bullet_tags(playbook, reflector_output.get("bullet_tags", []))  # type: ignore[arg-type]
         assert playbook["sections"]["PATTERNS & APPROACHES"][0]["helpful"] == 6  # was 5, +1
 
         # Step 9: Apply structured operations (simulated curator output -- no-op here)
         curator_output = {"reasoning": "no changes needed", "operations": []}
-        playbook = apply_structured_operations(playbook, curator_output.get("operations", []))
+        playbook = apply_structured_operations(playbook, curator_output.get("operations", []))  # type: ignore[arg-type]
 
         # Step 10: Deduplication -- this is the core of this test
         # Mock sentence_transformers so run_deduplication actually runs (not degrades)
@@ -2463,7 +2463,7 @@ class TestPipelineIntegration(unittest.TestCase):
     def test_full_pipeline_with_mocked_llm_calls(self):
         """Integration: run_reflector and run_curator called with mocked Anthropic."""
         if not hasattr(common, 'anthropic'):
-            common.anthropic = MagicMock()
+            setattr(common, 'anthropic', MagicMock())
             created_anthropic = True
         else:
             created_anthropic = False
@@ -2503,7 +2503,7 @@ class TestPipelineIntegration(unittest.TestCase):
                  patch("common.is_diagnostic_mode", return_value=False), \
                  patch("common.load_template", return_value="{transcript}\n{playbook}\n{cited_ids}"), \
                  patch("common.format_playbook", return_value="formatted"), \
-                 patch.object(common.anthropic, 'Anthropic', return_value=mock_client), \
+                 patch.object(getattr(common, 'anthropic'), 'Anthropic', return_value=mock_client), \
                  patch.dict(os.environ, {"AGENTIC_CONTEXT_API_KEY": "test-key", "AGENTIC_CONTEXT_MODEL": "test-model"}):
                 # Step 6: run_reflector (actual LLM call, mocked)
                 reflector_output = _run_async(run_reflector(messages, playbook, cited_ids))
@@ -2520,7 +2520,7 @@ class TestPipelineIntegration(unittest.TestCase):
                  patch("common.is_diagnostic_mode", return_value=False), \
                  patch("common.load_template", return_value="{reflector_output}\n{playbook}"), \
                  patch("common.format_playbook", return_value="formatted"), \
-                 patch.object(common.anthropic, 'Anthropic', return_value=mock_client), \
+                 patch.object(getattr(common, 'anthropic'), 'Anthropic', return_value=mock_client), \
                  patch.dict(os.environ, {"AGENTIC_CONTEXT_API_KEY": "test-key", "AGENTIC_CONTEXT_MODEL": "test-model"}):
                 # Step 8: run_curator (actual LLM call, mocked)
                 curator_output = _run_async(run_curator(reflector_output, playbook))

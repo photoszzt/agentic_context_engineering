@@ -61,7 +61,7 @@ def _setup_extract_keypoints_mocks(monkeypatch):
 
     mock_anthropic_cls = MagicMock(return_value=mock_client)
     fake_anthropic = ModuleType("anthropic")
-    fake_anthropic.Anthropic = mock_anthropic_cls
+    setattr(fake_anthropic, "Anthropic", mock_anthropic_cls)
     monkeypatch.setattr(_common_module, "anthropic", fake_anthropic, raising=False)
 
     return mock_client, mock_text_block

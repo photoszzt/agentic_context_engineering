@@ -36,7 +36,7 @@ def main():
         }
     }
 
-    sys.stdout.reconfigure(encoding="utf-8")
+    sys.stdout.reconfigure(encoding="utf-8")  # type: ignore[union-attr]
     print(json.dumps(response), flush=True)
 
     mark_session(session_id)

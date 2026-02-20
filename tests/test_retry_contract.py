@@ -61,7 +61,7 @@ def _setup_retry_mocks(monkeypatch):
 
     mock_anthropic_cls = MagicMock(return_value=mock_client)
     fake_anthropic = ModuleType("anthropic")
-    fake_anthropic.Anthropic = mock_anthropic_cls
+    setattr(fake_anthropic, "Anthropic", mock_anthropic_cls)
     # Copy exception classes from real anthropic module
     for attr_name in dir(anthropic):
         obj = getattr(anthropic, attr_name)

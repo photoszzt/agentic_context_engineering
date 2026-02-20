@@ -159,7 +159,7 @@ def _default_playbook() -> dict:
     }
 
 
-def _resolve_section(section_name: str) -> str:
+def _resolve_section(section_name: str | None) -> str:
     """Resolve a section name via case-insensitive exact match.
 
     Strips leading/trailing whitespace before matching.
@@ -618,7 +618,7 @@ def _apply_curator_operations(playbook: dict, operations: list) -> dict:
                 continue
 
             # OBS-CUR-003 (LOG-CUR-003): DELETE reason audit
-            if is_diagnostic_mode():
+            if is_diagnostic_mode() and found_entry is not None:
                 save_diagnostic(
                     f"DELETE applied: target_id={target_id!r}, "
                     f"text=\"{found_entry['text'][:80]}\", "
@@ -984,7 +984,7 @@ def _extract_json_robust(response_text: str) -> dict | None:
     return None
 
 
-def run_deduplication(playbook: dict, threshold: float = None) -> dict:
+def run_deduplication(playbook: dict, threshold: float | None = None) -> dict:
     """Deduplicate semantically similar key points across all sections.
 
     Uses SentenceTransformers for embedding and cosine similarity.
@@ -999,8 +999,8 @@ def run_deduplication(playbook: dict, threshold: float = None) -> dict:
     @invariant INV-DEDUP-005 (playbook structure preserved)
     """
     try:
-        import numpy as np
-        from sentence_transformers import SentenceTransformer
+        import numpy as np  # type: ignore[unresolved-import]
+        from sentence_transformers import SentenceTransformer  # type: ignore[unresolved-import]
         DEDUP_AVAILABLE = True
     except ImportError:
         DEDUP_AVAILABLE = False
@@ -1163,10 +1163,7 @@ async def run_reflector(messages: list[dict], playbook: dict, cited_ids: list[st
             cited_ids=json.dumps(cited_ids, ensure_ascii=False),
         )
 
-        client_kwargs = {"api_key": api_key}
-        if base_url:
-            client_kwargs["base_url"] = base_url
-        client = anthropic.Anthropic(**client_kwargs)
+        client = anthropic.Anthropic(api_key=api_key, base_url=base_url if base_url else None)
 
         # Same retry logic as extract_keypoints()
         response = None
@@ -1224,7 +1221,7 @@ async def run_reflector(messages: list[dict], playbook: dict, cited_ids: list[st
         for block in response.content:
             block_type = getattr(block, "type", None)
             if block_type == "text":
-                response_text_parts.append(block.text)
+                response_text_parts.append(getattr(block, "text", ""))
         response_text = "".join(response_text_parts)
 
         if is_diagnostic_mode():
@@ -1307,10 +1304,7 @@ async def run_curator(reflector_output: dict, playbook: dict) -> dict:
             playbook=formatted_playbook,
         )
 
-        client_kwargs = {"api_key": api_key}
-        if base_url:
-            client_kwargs["base_url"] = base_url
-        client = anthropic.Anthropic(**client_kwargs)
+        client = anthropic.Anthropic(api_key=api_key, base_url=base_url if base_url else None)
 
         # Same retry logic as extract_keypoints()
         response = None
@@ -1368,7 +1362,7 @@ async def run_curator(reflector_output: dict, playbook: dict) -> dict:
         for block in response.content:
             block_type = getattr(block, "type", None)
             if block_type == "text":
-                response_text_parts.append(block.text)
+                response_text_parts.append(getattr(block, "text", ""))
         response_text = "".join(response_text_parts)
 
         if is_diagnostic_mode():
@@ -1451,10 +1445,7 @@ async def extract_keypoints(
         playbook=json.dumps(playbook_dict, indent=2, ensure_ascii=False),
     )
 
-    client_kwargs = {"api_key": api_key}
-    if base_url:
-        client_kwargs["base_url"] = base_url
-    client = anthropic.Anthropic(**client_kwargs)
+    client = anthropic.Anthropic(api_key=api_key, base_url=base_url if base_url else None)
 
     # @implements REQ-RETRY-001, REQ-RETRY-002, REQ-RETRY-003, REQ-RETRY-004,
     #             REQ-RETRY-005, REQ-RETRY-006, REQ-RETRY-007
@@ -1624,11 +1615,14 @@ async def extract_keypoints(
                 )
             return {"new_key_points": [], "evaluations": []}
 
+    if response is None:
+        return {"new_key_points": [], "evaluations": []}
+
     response_text_parts = []
     for block in response.content:
         block_type = getattr(block, "type", None)
         if block_type == "text":
-            response_text_parts.append(block.text)
+            response_text_parts.append(getattr(block, "text", ""))
 
     response_text = "".join(response_text_parts)
 

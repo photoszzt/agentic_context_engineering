@@ -65,7 +65,7 @@ def _setup_extract_keypoints_mocks(monkeypatch):
 
     mock_anthropic_cls = MagicMock(return_value=mock_client)
     fake_anthropic = ModuleType("anthropic")
-    fake_anthropic.Anthropic = mock_anthropic_cls
+    setattr(fake_anthropic, "Anthropic", mock_anthropic_cls)
     # Copy all exception classes from real anthropic module to fake module
     for attr_name in dir(anthropic):
         obj = getattr(anthropic, attr_name)

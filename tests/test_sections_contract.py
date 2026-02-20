@@ -67,7 +67,7 @@ def _setup_extract_keypoints_mocks(monkeypatch):
 
     # Create a fake anthropic module with Anthropic class
     fake_anthropic = ModuleType("anthropic")
-    fake_anthropic.Anthropic = mock_anthropic_cls
+    setattr(fake_anthropic, "Anthropic", mock_anthropic_cls)
     monkeypatch.setattr(_common_module, "anthropic", fake_anthropic, raising=False)
 
     return mock_client
