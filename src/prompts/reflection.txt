@@ -1,5 +1,5 @@
 # Task
-Extract key points from reasoning trajectories and evaluate existing playbook key points.
+Extract key points from reasoning trajectories, evaluate existing playbook key points, and propose structural operations on the playbook.
 
 # Reasoning Trajectories
 {trajectories}
@@ -13,30 +13,47 @@ Extract key points from reasoning trajectories and evaluate existing playbook ke
    - Successful solutions and patterns
    - User preferences and habits
 
-2. Extract NEW key points from the reasoning trajectories that are NOT already in the Current Playbook
-
-3. Evaluate EACH existing playbook key point based on the reasoning trajectories:
+2. Evaluate EACH existing playbook key point based on the reasoning trajectories:
    - "helpful": key point was useful and applied correctly
    - "harmful": key point caused issues or provided wrong guidance
    - "neutral": key point was not relevant
 
+3. Propose structural operations on the playbook. Available operations:
+
+   a. ADD -- Add a new key point (for insights not already in the playbook)
+   b. MERGE -- Combine two or more overlapping/redundant key points into one
+   c. DELETE -- Remove a key point that is wrong, outdated, or harmful
+
 # @implements REQ-SECT-004
 # Sections
-Assign each new key point to one of these sections:
+Assign each new key point (ADD operation) to one of these sections:
 - PATTERNS & APPROACHES: Successful solutions, design patterns, architectural decisions
 - MISTAKES TO AVOID: Failed approaches, common pitfalls, anti-patterns
 - USER PREFERENCES: User's coding style, tool preferences, workflow habits
 - PROJECT CONTEXT: Project-specific facts, architecture, dependencies, conventions
 - OTHERS: Key points that don't fit the above categories
 
+# @implements REQ-CUR-007
+# Curator Operations Rules
+- You may return zero operations if no changes are needed
+- Maximum 10 operations per response
+- For MERGE and DELETE, use the key point IDs (names) shown in the Current Playbook above
+- MERGE requires at least 2 source_ids
+- DELETE requires a reason explaining why the entry should be removed
+- Do NOT include a "new_key_points" field; use ADD operations instead
+
 # Output Format
+Return a JSON object with "evaluations" and "operations":
 {{
-  "new_key_points": [
-    {{"text": "First key point", "section": "PATTERNS & APPROACHES"}},
-    {{"text": "Second key point", "section": "MISTAKES TO AVOID"}}
-  ],
   "evaluations": [
     {{"name": "pat-001", "rating": "helpful"}},
     {{"name": "kpt_001", "rating": "neutral"}}
+  ],
+  "operations": [
+    {{"type": "ADD", "text": "New insight from this session", "section": "PATTERNS & APPROACHES"}},
+    {{"type": "MERGE", "source_ids": ["pat-001", "pat-003"], "merged_text": "Combined type annotation guidance", "section": "PATTERNS & APPROACHES"}},
+    {{"type": "DELETE", "target_id": "mis-002", "reason": "Contradicts current project conventions"}}
   ]
 }}
+
+If you have no operations to propose, return "operations": [].

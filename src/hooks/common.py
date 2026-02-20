@@ -1,11 +1,15 @@
 #!/usr/bin/env python3
 # Module: common -- shared utilities for playbook lifecycle hooks.
 #
-# Spec: docs/sections/spec.md
-# Contract: docs/sections/contract.md
+# Spec: docs/sections/spec.md, docs/curator/spec.md, docs/retry/spec.md
+# Contract: docs/sections/contract.md, docs/curator/contract.md, docs/retry/contract.md
+# Observability: docs/curator/observability.md, docs/retry/observability.md
+import copy
 import json
 import os
+import random
 import re
+import time
 from pathlib import Path
 from datetime import datetime
 
@@ -27,6 +31,11 @@ SECTION_SLUGS = {
     "PROJECT CONTEXT": "ctx",
     "OTHERS": "oth",
 }
+
+# Retry configuration for extract_keypoints() API calls.
+# @implements REQ-RETRY-008
+MAX_RETRIES = 3    # Total attempts (0-indexed: attempt 0, 1, 2)
+BASE_DELAY = 2.0   # Base delay in seconds for exponential backoff
 
 
 def get_project_dir() -> Path:
@@ -326,60 +335,290 @@ def format_playbook(playbook: dict) -> str:
     return template.format(key_points=key_points_text)
 
 
+def _apply_curator_operations(playbook: dict, operations: list) -> dict:
+    """Apply curator operations (ADD, MERGE, DELETE) to the playbook.
+
+    The playbook passed in is a deep copy -- mutations are safe.
+    Operations are applied sequentially in list order.
+    Invalid operations are skipped (no-op with diagnostic log).
+
+    @implements REQ-CUR-002, REQ-CUR-003, REQ-CUR-004, REQ-CUR-005, REQ-CUR-009
+    @invariant INV-CUR-002 (no crash on invalid operations)
+    @invariant INV-CUR-004 (section names remain canonical)
+    @invariant INV-CUR-005 (operations bounded to 10)
+    """
+    # @invariant INV-CUR-005: Truncate to CON-CUR-004 max
+    MAX_OPS = 10
+    truncated_from = None
+    if len(operations) > MAX_OPS:
+        truncated_from = len(operations)
+        if is_diagnostic_mode():
+            save_diagnostic(
+                f"Operations list truncated from {truncated_from} to {MAX_OPS}",
+                "curator_ops_truncated"
+            )
+        operations = operations[:MAX_OPS]
+
+    # Counters for OBS-CUR-001 summary
+    counts = {"ADD": 0, "MERGE": 0, "DELETE": 0}
+    skipped = {"ADD": 0, "MERGE": 0, "DELETE": 0, "unknown": 0}
+    skip_reasons = []
+
+    for op in operations:
+        op_type = op.get("type", "")
+
+        if op_type == "ADD":
+            # REQ-CUR-002: ADD operation
+            # @invariant INV-CUR-002: validate before applying
+            text = op.get("text", "")
+            if not text or not isinstance(text, str) or not text.strip():
+                skipped["ADD"] += 1
+                skip_reasons.append("ADD: empty or missing text")
+                continue
+
+            raw_section = op.get("section", "") or ""
+            # @invariant INV-CUR-004: section names remain canonical
+            section_name = _resolve_section(raw_section)
+
+            # Dedup against all existing texts across all sections
+            existing_texts = set()
+            for entries in playbook["sections"].values():
+                for kp in entries:
+                    existing_texts.add(kp["text"])
+
+            if text in existing_texts:
+                skipped["ADD"] += 1
+                skip_reasons.append(f"ADD: duplicate text \"{text[:40]}...\"")
+                continue
+
+            slug = SECTION_SLUGS[section_name]
+            target_entries = playbook["sections"][section_name]
+            name = generate_keypoint_name(target_entries, slug)
+            target_entries.append({"name": name, "text": text, "helpful": 0, "harmful": 0})
+            counts["ADD"] += 1
+
+        elif op_type == "MERGE":
+            # REQ-CUR-003: MERGE operation
+            source_ids = op.get("source_ids", [])
+            merged_text = op.get("merged_text", "")
+
+            # Validation (QG-CUR-001)
+            if not isinstance(source_ids, list) or len(source_ids) < 2:
+                skipped["MERGE"] += 1
+                skip_reasons.append("MERGE: source_ids has fewer than 2 entries")
+                continue
+            if not merged_text or not isinstance(merged_text, str) or not merged_text.strip():
+                skipped["MERGE"] += 1
+                skip_reasons.append("MERGE: empty or missing merged_text")
+                continue
+
+            # Build ID-to-entry and ID-to-section lookup from current state
+            id_to_entry = {}
+            id_to_section = {}
+            for sec_name, entries in playbook["sections"].items():
+                for kp in entries:
+                    id_to_entry[kp["name"]] = kp
+                    id_to_section[kp["name"]] = sec_name
+
+            # Filter valid source_ids
+            valid_ids = []
+            for sid in source_ids:
+                if sid in id_to_entry:
+                    valid_ids.append(sid)
+                else:
+                    # OBS-CUR-002 (LOG-CUR-002): non-existent ID
+                    if is_diagnostic_mode():
+                        save_diagnostic(
+                            f"MERGE references non-existent ID: {sid!r}",
+                            "curator_nonexistent_id"
+                        )
+                    skip_reasons.append(f"MERGE: source_id {sid!r} not found")
+
+            if len(valid_ids) < 2:
+                skipped["MERGE"] += 1
+                skip_reasons.append("MERGE: fewer than 2 valid source_ids remain after filtering")
+                continue
+
+            # Resolve target section
+            raw_section = op.get("section", "") or ""
+            if raw_section and raw_section.strip():
+                # @invariant INV-CUR-004: section names remain canonical
+                target_section = _resolve_section(raw_section)
+            else:
+                target_section = id_to_section[valid_ids[0]]  # section of first valid source
+
+            # @invariant INV-CUR-003: Sum counters from valid sources (non-negative preserved)
+            total_helpful = sum(id_to_entry[sid]["helpful"] for sid in valid_ids)
+            total_harmful = sum(id_to_entry[sid]["harmful"] for sid in valid_ids)
+
+            # Create new entry in target section
+            slug = SECTION_SLUGS[target_section]
+            target_entries = playbook["sections"][target_section]
+            name = generate_keypoint_name(target_entries, slug)
+            target_entries.append({
+                "name": name,
+                "text": merged_text,
+                "helpful": total_helpful,
+                "harmful": total_harmful,
+            })
+
+            # Remove all valid source entries from their sections
+            for sid in valid_ids:
+                sec = id_to_section[sid]
+                playbook["sections"][sec] = [
+                    kp for kp in playbook["sections"][sec] if kp["name"] != sid
+                ]
+
+            counts["MERGE"] += 1
+
+        elif op_type == "DELETE":
+            # REQ-CUR-004: DELETE operation
+            target_id = op.get("target_id", "")
+            reason = op.get("reason", "")
+
+            if not target_id or not isinstance(target_id, str) or not target_id.strip():
+                skipped["DELETE"] += 1
+                skip_reasons.append("DELETE: empty or missing target_id")
+                continue
+
+            # Find the entry
+            found_section = None
+            found_entry = None
+            for sec_name, entries in playbook["sections"].items():
+                for kp in entries:
+                    if kp["name"] == target_id:
+                        found_section = sec_name
+                        found_entry = kp
+                        break
+                if found_section:
+                    break
+
+            if not found_section:
+                skipped["DELETE"] += 1
+                # OBS-CUR-002 (LOG-CUR-002): non-existent ID
+                if is_diagnostic_mode():
+                    save_diagnostic(
+                        f"DELETE references non-existent ID: {target_id!r}",
+                        "curator_nonexistent_id"
+                    )
+                skip_reasons.append(f"DELETE: target_id {target_id!r} not found")
+                continue
+
+            # OBS-CUR-003 (LOG-CUR-003): DELETE reason audit
+            if is_diagnostic_mode():
+                save_diagnostic(
+                    f"DELETE applied: target_id={target_id!r}, "
+                    f"text=\"{found_entry['text'][:80]}\", "
+                    f"reason={reason!r}",
+                    "curator_delete_audit"
+                )
+
+            # Remove entry
+            playbook["sections"][found_section] = [
+                kp for kp in playbook["sections"][found_section] if kp["name"] != target_id
+            ]
+            counts["DELETE"] += 1
+
+        else:
+            skipped["unknown"] += 1
+            skip_reasons.append(f"Unknown operation type: {op_type!r}")
+
+    # OBS-CUR-001 (LOG-CUR-001): Summary diagnostic
+    if is_diagnostic_mode():
+        summary_parts = ["Curator operations summary:"]
+        if truncated_from is not None:
+            summary_parts.append(f"  Operations list truncated from {truncated_from} to {MAX_OPS}")
+        summary_parts.append(f"  ADD: {counts['ADD']} applied, {skipped['ADD']} skipped")
+        summary_parts.append(f"  MERGE: {counts['MERGE']} applied, {skipped['MERGE']} skipped")
+        summary_parts.append(f"  DELETE: {counts['DELETE']} applied, {skipped['DELETE']} skipped")
+        summary_parts.append(f"  Unknown type: {skipped['unknown']} skipped")
+        if skip_reasons:
+            summary_parts.append("  Skip reasons:")
+            for r in skip_reasons:
+                summary_parts.append(f"    - {r}")
+        save_diagnostic("\n".join(summary_parts), "curator_ops_summary")
+
+    return playbook
+
+
 def update_playbook_data(playbook: dict, extraction_result: dict) -> dict:
-    """Apply new key points, evaluations, and pruning across all sections.
+    """Apply operations or new_key_points, evaluations, and pruning across all sections.
 
     Signature is UNCHANGED from the scoring module -- callers must not break.
 
-    @implements REQ-SECT-005, REQ-SECT-008
+    @implements REQ-CUR-006, REQ-CUR-008, REQ-SECT-005, REQ-SECT-008
+    @invariant INV-CUR-001 (deep copy isolation)
+    @invariant INV-CUR-006 (precedence prevents double-processing)
     @invariant INV-SECT-002 (section names from canonical set)
     @invariant INV-SECT-003 (counter non-negativity)
     @invariant INV-SECT-005 (section-slug ID prefix consistency)
     """
-    new_key_points = extraction_result.get("new_key_points", [])
+    # @invariant INV-CUR-006: REQ-CUR-008 Precedence rule
+    if "operations" in extraction_result:
+        # Operations path: deep copy + apply operations
+        operations = extraction_result.get("operations", [])
+        if isinstance(operations, list) and operations:
+            try:
+                # @invariant INV-CUR-001: deep copy isolation
+                playbook_copy = copy.deepcopy(playbook)
+                playbook = _apply_curator_operations(playbook_copy, operations)
+            except Exception:
+                # INV-CUR-001: rollback to original on uncaught exception
+                if is_diagnostic_mode():
+                    import traceback
+                    save_diagnostic(
+                        f"Operations rollback due to exception:\n{traceback.format_exc()}",
+                        "curator_ops_rollback"
+                    )
+                # playbook remains the original (unmodified)
+        # Skip new_key_points entirely (even if present) -- INV-CUR-006
+    else:
+        # Backward compat: use new_key_points as before (CON-CUR-001)
+        new_key_points = extraction_result.get("new_key_points", [])
+
+        # Collect all existing texts across all sections for dedup
+        existing_texts = set()
+        for entries in playbook["sections"].values():
+            for kp in entries:
+                existing_texts.add(kp["text"])
+
+        # REQ-SECT-005: New key point insertion with section resolution
+        for item in new_key_points:
+            # Backward compat: plain string -> {"text": str, "section": "OTHERS"}
+            # (SCN-SECT-004-03)
+            if isinstance(item, str):
+                text = item
+                section_name = "OTHERS"
+            elif isinstance(item, dict):
+                text = item.get("text", "")
+                raw_section = item.get("section", "") or ""
+                section_name = _resolve_section(raw_section)
+                # LOG-SECT-002: Unknown section fallback diagnostic
+                # Only emitted for non-empty strings that don't match canonical names
+                # (SCN-SECT-004-05: missing/None/empty do NOT trigger this)
+                if section_name == "OTHERS" and raw_section and raw_section.strip():
+                    # Check if the resolved "OTHERS" was due to unknown name vs. explicit "OTHERS"
+                    stripped_upper = raw_section.strip().upper()
+                    if stripped_upper != "OTHERS":
+                        if is_diagnostic_mode():
+                            save_diagnostic(
+                                f"Unknown section '{raw_section}' for key point: \"{text[:80]}\". "
+                                f"Assigned to OTHERS.",
+                                "sections_unknown_section"
+                            )
+            else:
+                continue  # Skip invalid entry types
+
+            if not text or text in existing_texts:
+                continue
+
+            slug = SECTION_SLUGS[section_name]
+            target_entries = playbook["sections"][section_name]
+            name = generate_keypoint_name(target_entries, slug)
+            target_entries.append({"name": name, "text": text, "helpful": 0, "harmful": 0})
+            existing_texts.add(text)
+
     evaluations = extraction_result.get("evaluations", [])
-
-    # Collect all existing texts across all sections for dedup
-    existing_texts = set()
-    for entries in playbook["sections"].values():
-        for kp in entries:
-            existing_texts.add(kp["text"])
-
-    # REQ-SECT-005: New key point insertion with section resolution
-    for item in new_key_points:
-        # Backward compat: plain string -> {"text": str, "section": "OTHERS"}
-        # (SCN-SECT-004-03)
-        if isinstance(item, str):
-            text = item
-            section_name = "OTHERS"
-        elif isinstance(item, dict):
-            text = item.get("text", "")
-            raw_section = item.get("section", "") or ""
-            section_name = _resolve_section(raw_section)
-            # LOG-SECT-002: Unknown section fallback diagnostic
-            # Only emitted for non-empty strings that don't match canonical names
-            # (SCN-SECT-004-05: missing/None/empty do NOT trigger this)
-            if section_name == "OTHERS" and raw_section and raw_section.strip():
-                # Check if the resolved "OTHERS" was due to unknown name vs. explicit "OTHERS"
-                stripped_upper = raw_section.strip().upper()
-                if stripped_upper != "OTHERS":
-                    if is_diagnostic_mode():
-                        save_diagnostic(
-                            f"Unknown section '{raw_section}' for key point: \"{text[:80]}\". "
-                            f"Assigned to OTHERS.",
-                            "sections_unknown_section"
-                        )
-        else:
-            continue  # Skip invalid entry types
-
-        if not text or text in existing_texts:
-            continue
-
-        slug = SECTION_SLUGS[section_name]
-        target_entries = playbook["sections"][section_name]
-        name = generate_keypoint_name(target_entries, slug)
-        target_entries.append({"name": name, "text": text, "helpful": 0, "harmful": 0})
-        existing_texts.add(text)
 
     # REQ-SECT-008: Evaluations across ALL sections
     # Build name-to-keypoint lookup across ALL sections
@@ -490,7 +729,13 @@ async def extract_keypoints(
 ) -> dict:
     """Extract key points from reasoning trajectories via LLM.
 
-    @implements REQ-SECT-009
+    @implements REQ-CUR-001, REQ-SECT-009,
+               REQ-RETRY-001, REQ-RETRY-002, REQ-RETRY-003, REQ-RETRY-004,
+               REQ-RETRY-005, REQ-RETRY-006, REQ-RETRY-007, REQ-RETRY-008
+    @invariant INV-RETRY-001 (function signature unchanged)
+    @invariant INV-RETRY-002 (only client.messages.create() is retried)
+    @invariant INV-RETRY-003 (total time within hook timeout)
+    @invariant INV-RETRY-004 (always returns valid extraction result)
     """
     if not ANTHROPIC_AVAILABLE:
         return {"new_key_points": [], "evaluations": []}
@@ -534,9 +779,173 @@ async def extract_keypoints(
         client_kwargs["base_url"] = base_url
     client = anthropic.Anthropic(**client_kwargs)
 
-    response = client.messages.create(
-        model=model, max_tokens=4096, messages=[{"role": "user", "content": prompt}]
-    )
+    # @implements REQ-RETRY-001, REQ-RETRY-002, REQ-RETRY-003, REQ-RETRY-004,
+    #             REQ-RETRY-005, REQ-RETRY-006, REQ-RETRY-007
+    # @invariant INV-RETRY-002 (only client.messages.create() is inside the retry loop)
+    # @invariant INV-RETRY-004 (every error path returns a valid extraction result dict)
+    response = None
+    for attempt in range(MAX_RETRIES):
+        try:
+            response = client.messages.create(
+                model=model,
+                max_tokens=4096,
+                messages=[{"role": "user", "content": prompt}],
+                timeout=30.0,
+            )
+            # Success: log if this was a retry (attempt > 0)
+            if attempt > 0 and is_diagnostic_mode():
+                save_diagnostic(
+                    f"extract_keypoints() succeeded on attempt {attempt + 1} after {attempt} retries.",
+                    "retry_extract_keypoints",
+                )
+            break
+
+        except anthropic.APITimeoutError as exc:
+            # Retryable: transient timeout (must be caught before APIConnectionError)
+            if attempt < MAX_RETRIES - 1:
+                delay = BASE_DELAY * (2 ** attempt) * random.uniform(0.75, 1.25)
+                if is_diagnostic_mode():
+                    save_diagnostic(
+                        f"Retry attempt {attempt + 1}/{MAX_RETRIES} failed: "
+                        f"APITimeoutError: {exc}. Next attempt in {delay:.1f}s",
+                        "retry_extract_keypoints",
+                    )
+                time.sleep(delay)
+                continue
+            else:
+                # Final attempt exhausted
+                if is_diagnostic_mode():
+                    save_diagnostic(
+                        f"All {MAX_RETRIES} attempts failed for extract_keypoints(). "
+                        f"Returning empty result.",
+                        "retry_extract_keypoints",
+                    )
+                return {"new_key_points": [], "evaluations": []}
+
+        except anthropic.APIConnectionError as exc:
+            # Retryable: transient connection failure
+            if attempt < MAX_RETRIES - 1:
+                delay = BASE_DELAY * (2 ** attempt) * random.uniform(0.75, 1.25)
+                if is_diagnostic_mode():
+                    save_diagnostic(
+                        f"Retry attempt {attempt + 1}/{MAX_RETRIES} failed: "
+                        f"APIConnectionError: {exc}. Next attempt in {delay:.1f}s",
+                        "retry_extract_keypoints",
+                    )
+                time.sleep(delay)
+                continue
+            else:
+                if is_diagnostic_mode():
+                    save_diagnostic(
+                        f"All {MAX_RETRIES} attempts failed for extract_keypoints(). "
+                        f"Returning empty result.",
+                        "retry_extract_keypoints",
+                    )
+                return {"new_key_points": [], "evaluations": []}
+
+        except anthropic.RateLimitError as exc:
+            # Retryable: HTTP 429
+            if attempt < MAX_RETRIES - 1:
+                delay = BASE_DELAY * (2 ** attempt) * random.uniform(0.75, 1.25)
+                if is_diagnostic_mode():
+                    save_diagnostic(
+                        f"Retry attempt {attempt + 1}/{MAX_RETRIES} failed: "
+                        f"RateLimitError: {exc}. Next attempt in {delay:.1f}s",
+                        "retry_extract_keypoints",
+                    )
+                time.sleep(delay)
+                continue
+            else:
+                if is_diagnostic_mode():
+                    save_diagnostic(
+                        f"All {MAX_RETRIES} attempts failed for extract_keypoints(). "
+                        f"Returning empty result.",
+                        "retry_extract_keypoints",
+                    )
+                return {"new_key_points": [], "evaluations": []}
+
+        except anthropic.InternalServerError as exc:
+            # Retryable: HTTP 500
+            if attempt < MAX_RETRIES - 1:
+                delay = BASE_DELAY * (2 ** attempt) * random.uniform(0.75, 1.25)
+                if is_diagnostic_mode():
+                    save_diagnostic(
+                        f"Retry attempt {attempt + 1}/{MAX_RETRIES} failed: "
+                        f"InternalServerError: {exc}. Next attempt in {delay:.1f}s",
+                        "retry_extract_keypoints",
+                    )
+                time.sleep(delay)
+                continue
+            else:
+                if is_diagnostic_mode():
+                    save_diagnostic(
+                        f"All {MAX_RETRIES} attempts failed for extract_keypoints(). "
+                        f"Returning empty result.",
+                        "retry_extract_keypoints",
+                    )
+                return {"new_key_points": [], "evaluations": []}
+
+        except anthropic.APIStatusError as exc:
+            # Catch-all for APIStatusError: check status_code to decide
+            if exc.status_code >= 500:
+                # Retryable: 5xx not caught by InternalServerError above
+                if attempt < MAX_RETRIES - 1:
+                    delay = BASE_DELAY * (2 ** attempt) * random.uniform(0.75, 1.25)
+                    if is_diagnostic_mode():
+                        save_diagnostic(
+                            f"Retry attempt {attempt + 1}/{MAX_RETRIES} failed: "
+                            f"{type(exc).__name__}: {exc}. Next attempt in {delay:.1f}s",
+                            "retry_extract_keypoints",
+                        )
+                    time.sleep(delay)
+                    continue
+                else:
+                    if is_diagnostic_mode():
+                        save_diagnostic(
+                            f"All {MAX_RETRIES} attempts failed for extract_keypoints(). "
+                            f"Returning empty result.",
+                            "retry_extract_keypoints",
+                        )
+                    return {"new_key_points": [], "evaluations": []}
+            else:
+                # Non-retryable: 4xx (except 429, already caught by RateLimitError)
+                if is_diagnostic_mode():
+                    save_diagnostic(
+                        f"Non-retryable error in extract_keypoints(): "
+                        f"{type(exc).__name__}: {exc}. Returning empty result.",
+                        "retry_extract_keypoints",
+                    )
+                return {"new_key_points": [], "evaluations": []}
+
+        except anthropic.APIResponseValidationError as exc:
+            # Non-retryable: SDK could not parse response (APIError but not APIStatusError)
+            if is_diagnostic_mode():
+                save_diagnostic(
+                    f"Non-retryable error in extract_keypoints(): "
+                    f"APIResponseValidationError: {exc}. Returning empty result.",
+                    "retry_extract_keypoints",
+                )
+            return {"new_key_points": [], "evaluations": []}
+
+        except anthropic.APIError as exc:
+            # Non-retryable: unknown APIError subclass (defensive fallback)
+            if is_diagnostic_mode():
+                save_diagnostic(
+                    f"Non-retryable error in extract_keypoints(): "
+                    f"{type(exc).__name__}: {exc}. Returning empty result.",
+                    "retry_extract_keypoints",
+                )
+            return {"new_key_points": [], "evaluations": []}
+
+        except Exception as exc:
+            # Non-retryable: non-API exception (may be a programming bug)
+            if is_diagnostic_mode():
+                save_diagnostic(
+                    f"Non-retryable error in extract_keypoints(): "
+                    f"{type(exc).__name__}: {exc}. Returning empty result.",
+                    "retry_extract_keypoints",
+                )
+            return {"new_key_points": [], "evaluations": []}
 
     response_text_parts = []
     for block in response.content:
@@ -571,7 +980,12 @@ async def extract_keypoints(
     except json.JSONDecodeError:
         return {"new_key_points": [], "evaluations": []}
 
-    return {
+    extraction = {
         "new_key_points": result.get("new_key_points", []),
         "evaluations": result.get("evaluations", []),
     }
+    # SC-CUR-001: Include operations if present in LLM response AND is a list
+    # SCN-CUR-001-04: Non-list values (null, string, int) treated as absent
+    if "operations" in result and isinstance(result["operations"], list):
+        extraction["operations"] = result["operations"]
+    return extraction
