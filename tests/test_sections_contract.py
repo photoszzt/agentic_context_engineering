@@ -11,7 +11,6 @@ They verify only behaviors promised by the data contracts.
 
 import asyncio
 import json
-import os
 import sys
 from types import ModuleType
 from unittest.mock import MagicMock

@@ -9,9 +9,7 @@ TC-EDGE-*, TC-INV-*.
 """
 
 import json
-import os
 import sys
-import glob
 
 import pytest
 
@@ -24,8 +22,6 @@ from src.hooks.common import (
     update_playbook_data,
     format_playbook,
     generate_keypoint_name,
-    is_diagnostic_mode,
-    save_diagnostic,
 )
 
 
@@ -303,7 +299,7 @@ def test_scn_format_includes_counts(project_dir, mock_template):
     result = format_playbook(playbook)
     # Verify both entries are in the expected format
     lines = result.split("\n")
-    key_points_lines = [l for l in lines if l.startswith("[kpt_")]
+    key_points_lines = [line for line in lines if line.startswith("[kpt_")]
     assert len(key_points_lines) == 2
     assert key_points_lines[0] == "[kpt_001] helpful=5 harmful=1 :: use type hints"
     assert key_points_lines[1] == "[kpt_002] helpful=0 harmful=0 :: prefer pathlib"

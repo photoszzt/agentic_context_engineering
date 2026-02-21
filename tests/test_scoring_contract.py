@@ -10,7 +10,6 @@ They verify only behaviors promised by the data contracts.
 """
 
 import json
-import os
 import sys
 
 import pytest

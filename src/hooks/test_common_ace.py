@@ -14,7 +14,7 @@ import os
 import sys
 import unittest
 from pathlib import Path
-from unittest.mock import MagicMock, patch, PropertyMock
+from unittest.mock import MagicMock, patch
 
 # Ensure common.py is importable from this directory
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -126,7 +126,6 @@ def _make_embeddings_with_similarity(n, sim_pairs, dim=2):
     Returns list of lists (n x dim).
     Default: all pairs not in sim_pairs have similarity 0.
     """
-    import math
 
     if n == 2 and len(sim_pairs) == 1:
         _, _, sim = sim_pairs[0]

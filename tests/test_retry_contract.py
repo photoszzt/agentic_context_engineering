@@ -12,7 +12,6 @@ promised by the data contracts.
 
 import asyncio
 import inspect
-import json
 import sys
 import time
 from types import ModuleType

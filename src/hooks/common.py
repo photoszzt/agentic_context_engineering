@@ -1243,7 +1243,7 @@ async def run_reflector(messages: list[dict], playbook: dict, cited_ids: list[st
             "bullet_tags": result.get("bullet_tags", []),
         }
 
-    except Exception as exc:
+    except Exception:
         # INV-REFL-002: defensive fallback -- never raise to caller
         if is_diagnostic_mode():
             import traceback
@@ -1384,7 +1384,7 @@ async def run_curator(reflector_output: dict, playbook: dict) -> dict:
             "operations": result.get("operations", []),
         }
 
-    except Exception as exc:
+    except Exception:
         # INV-CUR-008: defensive fallback -- never raise to caller
         if is_diagnostic_mode():
             import traceback
@@ -1411,7 +1411,7 @@ async def extract_keypoints(
     if not ANTHROPIC_AVAILABLE:
         return {"new_key_points": [], "evaluations": []}
 
-    settings = load_settings()
+    load_settings()
 
     model = (
         os.getenv("AGENTIC_CONTEXT_MODEL")

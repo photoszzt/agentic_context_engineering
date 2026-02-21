@@ -10,7 +10,6 @@ and adversarial test categories TC-BOUND-*, TC-ERR-*, TC-NEG-*, TC-TIME-*.
 
 import asyncio
 import inspect
-import json
 import random
 import sys
 import time
@@ -25,8 +24,6 @@ sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent.par
 import src.hooks.common as _common_module
 
 from src.hooks.common import (
-    BASE_DELAY,
-    MAX_RETRIES,
     extract_keypoints,
 )
 
@@ -509,7 +506,7 @@ def test_scn_runtime_error_not_retried(monkeypatch, project_dir):
 def test_scn_api_timeout_caught_before_api_connection(monkeypatch, project_dir, enable_diagnostic):
     """APITimeoutError is caught correctly and logged as 'APITimeoutError', not 'APIConnectionError'."""
     mock_client, _ = _setup_extract_keypoints_mocks(monkeypatch)
-    sleep_calls = _capture_sleep(monkeypatch)
+    _capture_sleep(monkeypatch)
     diag_calls = _capture_diagnostic(monkeypatch)
     _fix_jitter(monkeypatch, 1.0)
 
@@ -778,7 +775,7 @@ def test_timeout_parameter_passed(monkeypatch, project_dir):
 def test_scn_timeout_on_every_attempt(monkeypatch, project_dir):
     """timeout=30.0 is set on every attempt (0, 1, 2)."""
     mock_client, _ = _setup_extract_keypoints_mocks(monkeypatch)
-    sleep_calls = _capture_sleep(monkeypatch)
+    _capture_sleep(monkeypatch)
     _fix_jitter(monkeypatch, 1.0)
 
     mock_client.messages.create.side_effect = [
@@ -804,7 +801,7 @@ def test_scn_timeout_on_every_attempt(monkeypatch, project_dir):
 def test_diagnostic_logging_per_attempt(monkeypatch, project_dir, enable_diagnostic):
     """Per-attempt diagnostic log emitted on retryable errors (not final attempt)."""
     mock_client, _ = _setup_extract_keypoints_mocks(monkeypatch)
-    sleep_calls = _capture_sleep(monkeypatch)
+    _capture_sleep(monkeypatch)
     diag_calls = _capture_diagnostic(monkeypatch)
     _fix_jitter(monkeypatch, 1.0)
 
@@ -826,7 +823,7 @@ def test_diagnostic_logging_per_attempt(monkeypatch, project_dir, enable_diagnos
 def test_diagnostic_logging_exhaustion(monkeypatch, project_dir, enable_diagnostic):
     """Exhaustion diagnostic log emitted when all attempts fail."""
     mock_client, _ = _setup_extract_keypoints_mocks(monkeypatch)
-    sleep_calls = _capture_sleep(monkeypatch)
+    _capture_sleep(monkeypatch)
     diag_calls = _capture_diagnostic(monkeypatch)
     _fix_jitter(monkeypatch, 1.0)
 
@@ -853,7 +850,7 @@ def test_diagnostic_logging_exhaustion(monkeypatch, project_dir, enable_diagnost
 def test_diagnostic_logging_success_after_retry(monkeypatch, project_dir, enable_diagnostic):
     """Success-after-retry diagnostic log emitted when attempt > 0 succeeds."""
     mock_client, _ = _setup_extract_keypoints_mocks(monkeypatch)
-    sleep_calls = _capture_sleep(monkeypatch)
+    _capture_sleep(monkeypatch)
     diag_calls = _capture_diagnostic(monkeypatch)
     _fix_jitter(monkeypatch, 1.0)
 
@@ -879,7 +876,7 @@ def test_diagnostic_logging_success_after_retry(monkeypatch, project_dir, enable
 def test_scn_per_attempt_diagnostic_log(monkeypatch, project_dir, enable_diagnostic):
     """Per-attempt log has correct format: 'Retry attempt 1/3 failed: APITimeoutError: ...'"""
     mock_client, _ = _setup_extract_keypoints_mocks(monkeypatch)
-    sleep_calls = _capture_sleep(monkeypatch)
+    _capture_sleep(monkeypatch)
     diag_calls = _capture_diagnostic(monkeypatch)
     _fix_jitter(monkeypatch, 1.0)
 
@@ -917,7 +914,7 @@ def test_scn_no_diagnostic_when_mode_off(monkeypatch, project_dir):
         _make_mock_response(VALID_JSON),
     ]
 
-    result = asyncio.run(extract_keypoints(messages=[], playbook={"sections": {}}))
+    asyncio.run(extract_keypoints(messages=[], playbook={"sections": {}}))
 
     # Retry still works
     assert mock_client.messages.create.call_count == 2
@@ -935,7 +932,7 @@ def test_scn_no_diagnostic_when_mode_off(monkeypatch, project_dir):
 def test_scn_success_after_retry_logged(monkeypatch, project_dir, enable_diagnostic):
     """Success after 1 retry: log 'succeeded on attempt 2 after 1 retries.'"""
     mock_client, _ = _setup_extract_keypoints_mocks(monkeypatch)
-    sleep_calls = _capture_sleep(monkeypatch)
+    _capture_sleep(monkeypatch)
     diag_calls = _capture_diagnostic(monkeypatch)
     _fix_jitter(monkeypatch, 1.0)
 
@@ -1008,13 +1005,13 @@ def test_invariant_function_signature_unchanged():
     assert messages_param.annotation == list[dict], (
         f"messages annotation should be list[dict], got {messages_param.annotation}"
     )
-    assert playbook_param.annotation == dict, (
+    assert playbook_param.annotation is dict, (
         f"playbook annotation should be dict, got {playbook_param.annotation}"
     )
-    assert diagnostic_name_param.annotation == str, (
+    assert diagnostic_name_param.annotation is str, (
         f"diagnostic_name annotation should be str, got {diagnostic_name_param.annotation}"
     )
-    assert sig.return_annotation == dict, (
+    assert sig.return_annotation is dict, (
         f"return annotation should be dict, got {sig.return_annotation}"
     )
 
@@ -1028,11 +1025,12 @@ def test_invariant_function_signature_unchanged():
 def test_invariant_only_api_call_retried(monkeypatch, project_dir):
     """Prompt construction, template loading, and settings loading run once; only API call is retried."""
     mock_client, _ = _setup_extract_keypoints_mocks(monkeypatch)
-    sleep_calls = _capture_sleep(monkeypatch)
+    _capture_sleep(monkeypatch)
     _fix_jitter(monkeypatch, 1.0)
 
     load_template_calls = []
-    original_load_template = lambda name: "Trajectories: {trajectories}\nPlaybook: {playbook}"
+    def original_load_template(name):
+        return "Trajectories: {trajectories}\nPlaybook: {playbook}"
 
     def counting_load_template(name):
         load_template_calls.append(name)
@@ -1236,7 +1234,7 @@ def test_tc_bound_004_status_500_retried(monkeypatch, project_dir):
         _make_mock_response(VALID_JSON),
     ]
 
-    result = asyncio.run(extract_keypoints(messages=[], playbook={"sections": {}}))
+    asyncio.run(extract_keypoints(messages=[], playbook={"sections": {}}))
 
     assert mock_client.messages.create.call_count == 2
 
@@ -1383,7 +1381,7 @@ def test_tc_err_003_status_503_retried_via_5xx(monkeypatch, project_dir):
         _make_mock_response(VALID_JSON),
     ]
 
-    result = asyncio.run(extract_keypoints(messages=[], playbook={"sections": {}}))
+    asyncio.run(extract_keypoints(messages=[], playbook={"sections": {}}))
 
     assert mock_client.messages.create.call_count == 2
 
@@ -1398,7 +1396,7 @@ def test_tc_err_004_status_404_not_retried(monkeypatch, project_dir):
         message="not found", response=MagicMock(status_code=404, headers={}), body={}
     )
 
-    result = asyncio.run(extract_keypoints(messages=[], playbook={"sections": {}}))
+    asyncio.run(extract_keypoints(messages=[], playbook={"sections": {}}))
 
     assert mock_client.messages.create.call_count == 1
     assert len(sleep_calls) == 0
@@ -1414,7 +1412,7 @@ def test_tc_err_005_response_validation_not_retried(monkeypatch, project_dir):
         response=MagicMock(status_code=200, headers={}), body={}, message="fail"
     )
 
-    result = asyncio.run(extract_keypoints(messages=[], playbook={"sections": {}}))
+    asyncio.run(extract_keypoints(messages=[], playbook={"sections": {}}))
 
     assert mock_client.messages.create.call_count == 1
     assert len(sleep_calls) == 0
@@ -1429,7 +1427,7 @@ def test_tc_err_006_unknown_api_error_not_retried(monkeypatch, project_dir):
     exc = anthropic.APIError(message="unknown", request=MagicMock(), body=None)
     mock_client.messages.create.side_effect = exc
 
-    result = asyncio.run(extract_keypoints(messages=[], playbook={"sections": {}}))
+    asyncio.run(extract_keypoints(messages=[], playbook={"sections": {}}))
 
     assert mock_client.messages.create.call_count == 1
     assert len(sleep_calls) == 0
@@ -1443,7 +1441,7 @@ def test_tc_err_007_bare_exception_not_retried(monkeypatch, project_dir):
 
     mock_client.messages.create.side_effect = RuntimeError("unexpected")
 
-    result = asyncio.run(extract_keypoints(messages=[], playbook={"sections": {}}))
+    asyncio.run(extract_keypoints(messages=[], playbook={"sections": {}}))
 
     assert mock_client.messages.create.call_count == 1
     assert len(sleep_calls) == 0
@@ -1453,7 +1451,7 @@ def test_tc_err_007_bare_exception_not_retried(monkeypatch, project_dir):
 def test_tc_err_008_auth_error_not_retried(monkeypatch, project_dir):
     """TC-ERR-008: AuthenticationError (401) not retried."""
     mock_client, _ = _setup_extract_keypoints_mocks(monkeypatch)
-    sleep_calls = _capture_sleep(monkeypatch)
+    _capture_sleep(monkeypatch)
 
     mock_client.messages.create.side_effect = anthropic.AuthenticationError(
         message="auth", response=MagicMock(status_code=401, headers={}), body={}
@@ -1469,7 +1467,7 @@ def test_tc_err_008_auth_error_not_retried(monkeypatch, project_dir):
 def test_tc_err_009_permission_denied_not_retried(monkeypatch, project_dir):
     """TC-ERR-009: PermissionDeniedError (403) not retried."""
     mock_client, _ = _setup_extract_keypoints_mocks(monkeypatch)
-    sleep_calls = _capture_sleep(monkeypatch)
+    _capture_sleep(monkeypatch)
 
     mock_client.messages.create.side_effect = anthropic.PermissionDeniedError(
         message="forbidden", response=MagicMock(status_code=403, headers={}), body={}
@@ -1485,7 +1483,7 @@ def test_tc_err_009_permission_denied_not_retried(monkeypatch, project_dir):
 def test_tc_err_010_unprocessable_entity_not_retried(monkeypatch, project_dir):
     """TC-ERR-010: UnprocessableEntityError (422) not retried."""
     mock_client, _ = _setup_extract_keypoints_mocks(monkeypatch)
-    sleep_calls = _capture_sleep(monkeypatch)
+    _capture_sleep(monkeypatch)
 
     mock_client.messages.create.side_effect = anthropic.UnprocessableEntityError(
         message="unprocessable", response=MagicMock(status_code=422, headers={}), body={}

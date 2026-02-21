@@ -9,10 +9,8 @@ all 7 INV-SECT-* invariants, and LOG-SECT-001/002/003 instrumentation tests.
 
 import asyncio
 import json
-import os
 import sys
-import glob as glob_module
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 from types import ModuleType
 
 import pytest

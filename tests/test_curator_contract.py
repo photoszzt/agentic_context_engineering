@@ -12,7 +12,6 @@ They verify only behaviors promised by the data contracts.
 import asyncio
 import copy
 import json
-import os
 import sys
 from types import ModuleType
 from unittest.mock import MagicMock
@@ -448,7 +447,7 @@ def test_contract_deep_copy_isolation(project_dir):
         ],
         "evaluations": [],
     }
-    result = update_playbook_data(playbook, extraction)
+    update_playbook_data(playbook, extraction)
 
     # The passed-in playbook should be unchanged
     assert playbook["sections"]["OTHERS"] == original_copy["sections"]["OTHERS"]

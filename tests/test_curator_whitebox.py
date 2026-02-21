@@ -10,9 +10,7 @@ all 6 INV-CUR-* invariants, and LOG-CUR-001/002/003 instrumentation tests.
 import asyncio
 import copy
 import json
-import os
 import sys
-import time
 from types import ModuleType
 from unittest.mock import MagicMock
 
@@ -25,11 +23,8 @@ import src.hooks.common as _common_module
 
 from src.hooks.common import (
     SECTION_SLUGS,
-    _apply_curator_operations,
     _default_playbook,
-    _resolve_section,
     extract_keypoints,
-    generate_keypoint_name,
     update_playbook_data,
 )
 
@@ -712,7 +707,7 @@ def test_scn_exception_rollback_returns_original(project_dir, monkeypatch):
             {"name": "pat-001", "text": "A", "helpful": 5, "harmful": 1},
         ],
     })
-    original_sections = copy.deepcopy(playbook["sections"])
+    copy.deepcopy(playbook["sections"])
 
     # Monkeypatch _apply_curator_operations to raise
     monkeypatch.setattr(
