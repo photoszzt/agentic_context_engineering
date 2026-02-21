@@ -16,7 +16,7 @@ import sys
 import pytest
 
 # Ensure the project root is on sys.path
-sys.path.insert(0, "/data/agentic_context_engineering")
+sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent.parent))
 
 from src.hooks.common import (
     load_playbook,
@@ -381,7 +381,7 @@ def test_contract_pruning_decision_table(project_dir):
 def test_contract_template_explains_semantics():
     """Contract: Template contains guidance about helpful/harmful counts,
     ratio weighting, and the {key_points} placeholder."""
-    template_path = "/data/agentic_context_engineering/src/prompts/playbook.txt"
+    template_path = str(__import__("pathlib").Path(__file__).resolve().parent.parent / "src" / "prompts" / "playbook.txt")
     with open(template_path, "r", encoding="utf-8") as f:
         content = f.read()
 

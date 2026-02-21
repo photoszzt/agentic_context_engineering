@@ -16,7 +16,7 @@ import glob
 import pytest
 
 # Ensure the project root is on sys.path so we can import from src.hooks.common
-sys.path.insert(0, "/data/agentic_context_engineering")
+sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent.parent))
 
 from src.hooks.common import (
     load_playbook,
@@ -554,7 +554,7 @@ def test_scn_retain_harmful_below_floor(project_dir):
 # @tests REQ-SCORE-008, SCN-SCORE-008-01
 def test_template_explains_scoring_semantics():
     """The playbook.txt template explains helpful/harmful semantics."""
-    template_path = "/data/agentic_context_engineering/src/prompts/playbook.txt"
+    template_path = str(__import__("pathlib").Path(__file__).resolve().parent.parent / "src" / "prompts" / "playbook.txt")
     with open(template_path, "r", encoding="utf-8") as f:
         content = f.read()
     assert "{key_points}" in content
@@ -567,7 +567,7 @@ def test_template_explains_scoring_semantics():
 def test_scn_template_content():
     """SCN-SCORE-008-01: Template contains guidance about helpful/harmful counts
     and ratio weighting."""
-    template_path = "/data/agentic_context_engineering/src/prompts/playbook.txt"
+    template_path = str(__import__("pathlib").Path(__file__).resolve().parent.parent / "src" / "prompts" / "playbook.txt")
     with open(template_path, "r", encoding="utf-8") as f:
         content = f.read()
     # Template must explain these semantic concepts per REQ-SCORE-008

@@ -19,7 +19,7 @@ from unittest.mock import MagicMock
 import pytest
 
 # Ensure the project root is on sys.path so we can import from src.hooks.common
-sys.path.insert(0, "/data/agentic_context_engineering")
+sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent.parent))
 
 import src.hooks.common as _common_module
 
@@ -791,7 +791,7 @@ def test_rollback_on_exception(project_dir, monkeypatch):
 # @tests REQ-CUR-007
 def test_prompt_includes_operations_instructions():
     """reflection.txt template includes operation instructions and examples."""
-    template_path = "/data/agentic_context_engineering/src/prompts/reflection.txt"
+    template_path = str(__import__("pathlib").Path(__file__).resolve().parent.parent / "src" / "prompts" / "reflection.txt")
     with open(template_path, "r", encoding="utf-8") as f:
         content = f.read()
 
@@ -812,7 +812,7 @@ def test_prompt_includes_operations_instructions():
 # @tests SCN-CUR-007-01
 def test_scn_prompt_includes_entry_ids_and_examples():
     """SCN-CUR-007-01: Prompt has ADD/MERGE/DELETE examples, max 10, zero ops allowance."""
-    template_path = "/data/agentic_context_engineering/src/prompts/reflection.txt"
+    template_path = str(__import__("pathlib").Path(__file__).resolve().parent.parent / "src" / "prompts" / "reflection.txt")
     with open(template_path, "r", encoding="utf-8") as f:
         content = f.read()
 

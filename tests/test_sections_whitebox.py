@@ -18,7 +18,7 @@ from types import ModuleType
 import pytest
 
 # Ensure the project root is on sys.path so we can import from src.hooks.common
-sys.path.insert(0, "/data/agentic_context_engineering")
+sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent.parent))
 
 import src.hooks.common as _common_module
 
@@ -450,7 +450,7 @@ def test_scn_format_overhead_within_20_percent(project_dir, mock_template):
 # @tests REQ-SECT-004
 def test_reflection_template_lists_sections():
     """reflection.txt lists all canonical section names and JSON format."""
-    template_path = "/data/agentic_context_engineering/src/prompts/reflection.txt"
+    template_path = str(__import__("pathlib").Path(__file__).resolve().parent.parent / "src" / "prompts" / "reflection.txt")
     with open(template_path, "r", encoding="utf-8") as f:
         content = f.read()
 

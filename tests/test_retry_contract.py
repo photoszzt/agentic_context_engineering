@@ -21,7 +21,7 @@ from unittest.mock import MagicMock
 import anthropic
 import pytest
 
-sys.path.insert(0, "/data/agentic_context_engineering")
+sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent.parent))
 
 import src.hooks.common as _common_module
 

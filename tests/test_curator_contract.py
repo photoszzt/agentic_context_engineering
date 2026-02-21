@@ -20,7 +20,7 @@ from unittest.mock import MagicMock
 import pytest
 
 # Ensure the project root is on sys.path
-sys.path.insert(0, "/data/agentic_context_engineering")
+sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent.parent))
 
 import src.hooks.common as _common_module
 
@@ -462,7 +462,7 @@ def test_contract_deep_copy_isolation(project_dir):
 # @tests-contract REQ-CUR-007
 def test_contract_prompt_structure():
     """Contract: reflection.txt template includes operation examples and instructions."""
-    template_path = "/data/agentic_context_engineering/src/prompts/reflection.txt"
+    template_path = str(__import__("pathlib").Path(__file__).resolve().parent.parent / "src" / "prompts" / "reflection.txt")
     with open(template_path, "r", encoding="utf-8") as f:
         content = f.read()
 
