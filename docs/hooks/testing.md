@@ -315,3 +315,243 @@ Before claiming Phase 2 COMPLETE:
 8. Race detector: N/A (Python, not Go)
 9. Flaky detection: `pytest tests/test_hooks_whitebox.py tests/test_hooks_contract.py --count=100` (using pytest-repeat if available, else run in loop)
 10. Deliverable tests: at least one test runs `node install.js` end-to-end and verifies the full output
+
+---
+
+# Test Strategy: Precompact Pipeline (precompact.py)
+
+## Coverage Targets
+- Line coverage: >= 80% (of `precompact.py` logic: pipeline orchestration, early exit, error handling)
+- Branch coverage: >= 70%
+- All 9 REQ-PRECOMPACT-* (001-009) covered by both white-box and contract tests
+- All 11 SCN-PRECOMPACT-* covered by white-box tests
+- All 3 INV-PRECOMPACT-* covered by white-box invariant tests
+- Contract test coverage: every REQ-PRECOMPACT-* must have a contract test OR documented justification
+
+## Intent Traceability
+
+Success criteria from spec.md traceability matrix (lines 22-34), mapped to test functions.
+
+| SC-* | Success Criterion | REQ-*/SCN-*/INV-* | Test Type | Test Function |
+|------|-------------------|-------------------|-----------|---------------|
+| SC-PRECOMPACT-001 | Pipeline replacement: no old functions, imports 7-step pipeline | REQ-PRECOMPACT-001 | White-box | test_pipeline_replacement_no_old_imports |
+| SC-PRECOMPACT-001 | (same) | SCN-PRECOMPACT-001-01 | White-box | test_scn_old_imports_removed |
+| SC-PRECOMPACT-001 | (same) | SCN-PRECOMPACT-001-02 | White-box | test_scn_import_smoke_test |
+| SC-PRECOMPACT-001 | (same) | REQ-PRECOMPACT-001 | Contract | test_contract_pipeline_runs_successfully |
+| SC-PRECOMPACT-002 | Two-step LLM flow: reflector then curator | REQ-PRECOMPACT-002 | White-box | test_reflector_curator_arguments |
+| SC-PRECOMPACT-002 | (same) | SCN-PRECOMPACT-002-01 | White-box | test_scn_reflector_curator_call_arguments |
+| SC-PRECOMPACT-002 | (same) | REQ-PRECOMPACT-002 | White-box | test_await_usage |
+| SC-PRECOMPACT-002 | (same) | REQ-PRECOMPACT-002 | Contract | (see Contract Test Exclusions -- requires behavioral assertions beyond exit code) |
+| SC-PRECOMPACT-003 | Counter update before curator | REQ-PRECOMPACT-003 | White-box | test_counter_update_before_curator |
+| SC-PRECOMPACT-003 | (same) | SCN-PRECOMPACT-003-01 | White-box | test_scn_bullet_tags_applied_before_curator |
+| SC-PRECOMPACT-003 | (same) | INV-PRECOMPACT-001 | White-box | test_invariant_counter_update_precedes_curator |
+| SC-PRECOMPACT-003 | (same) | REQ-PRECOMPACT-003 | Contract | (see Contract Test Exclusions -- ordering not observable via exit code) |
+| SC-PRECOMPACT-004 | Dedup then prune after curator | REQ-PRECOMPACT-004 | White-box | test_dedup_then_prune_ordering |
+| SC-PRECOMPACT-004 | (same) | SCN-PRECOMPACT-004-01 | White-box | test_scn_dedup_then_prune_after_curator_ops |
+| SC-PRECOMPACT-004 | (same) | REQ-PRECOMPACT-004 | Contract | (see Contract Test Exclusions -- ordering not observable via exit code) |
+| SC-PRECOMPACT-005 | Pipeline parity with session_end.py | REQ-PRECOMPACT-005 | White-box | test_parity_with_session_end |
+| SC-PRECOMPACT-005 | (same) | SCN-PRECOMPACT-005-01 | White-box | test_scn_side_by_side_parity |
+| SC-PRECOMPACT-005 | (same) | INV-PRECOMPACT-002 | White-box | test_invariant_pipeline_function_parity |
+| SC-PRECOMPACT-005 | (same) | REQ-PRECOMPACT-005 | Contract | (see Contract Test Exclusions -- parity not observable via exit code) |
+| SC-PRECOMPACT-006 | No settings checks | REQ-PRECOMPACT-006 | White-box | test_no_settings_logic |
+| SC-PRECOMPACT-006 | (same) | SCN-PRECOMPACT-006-01 | White-box | test_scn_no_settings_logic_present |
+| SC-PRECOMPACT-006 | (same) | REQ-PRECOMPACT-006 | Contract | test_contract_no_settings_behavior |
+| SC-PRECOMPACT-007 | clear_session called after save | REQ-PRECOMPACT-007 | White-box | test_clear_session_after_save |
+| SC-PRECOMPACT-007 | (same) | SCN-PRECOMPACT-007-01 | White-box | test_scn_clear_session_called_as_final_step |
+| SC-PRECOMPACT-007 | (same) | REQ-PRECOMPACT-007 | Contract | (see Contract Test Exclusions -- clear_session timing not observable via exit code) |
+| SC-PRECOMPACT-008 | Graceful error handling | REQ-PRECOMPACT-008 | White-box | test_error_handling_top_level |
+| SC-PRECOMPACT-008 | (same) | SCN-PRECOMPACT-008-01 | White-box | test_scn_top_level_exception_handling |
+| SC-PRECOMPACT-008 | (same) | SCN-PRECOMPACT-008-02 | White-box | test_scn_llm_call_graceful_degradation |
+| SC-PRECOMPACT-008 | (same) | REQ-PRECOMPACT-008 | Contract | test_contract_exception_causes_exit_1 |
+| SC-PRECOMPACT-009 | Empty transcript early exit | REQ-PRECOMPACT-009 | White-box | test_empty_transcript_early_exit |
+| SC-PRECOMPACT-009 | (same) | SCN-PRECOMPACT-009-01 | White-box | test_scn_empty_transcript_exits_immediately |
+| SC-PRECOMPACT-009 | (same) | REQ-PRECOMPACT-009 | Contract | test_contract_empty_transcript_exit_0 |
+
+## Mocking Strategy
+
+### Overview
+
+`precompact.py` is a thin pipeline orchestrator that imports and calls functions from `common.py`. The external dependencies are:
+1. **LLM API calls** (via `run_reflector` and `run_curator` in `common.py`)
+2. **Disk I/O** (via `load_transcript`, `load_playbook`, `save_playbook`, `clear_session` in `common.py`)
+3. **Embedding model** (via `run_deduplication` in `common.py`)
+4. **stdin JSON** (via `json.load(sys.stdin)`)
+
+### External Dependencies
+
+| Dependency | Mock Approach | Testability Hook |
+|------------|---------------|------------------|
+| `run_reflector` (async LLM call) | `unittest.mock.AsyncMock` patching `src.hooks.common.run_reflector` | Already a module-level function in `common.py`; standard `monkeypatch.setattr` works |
+| `run_curator` (async LLM call) | `unittest.mock.AsyncMock` patching `src.hooks.common.run_curator` | Same as above |
+| `load_transcript` | `monkeypatch.setattr` returning controlled message list | Module-level function |
+| `load_playbook` | `monkeypatch.setattr` returning a controlled playbook dict | Module-level function |
+| `save_playbook` | `monkeypatch.setattr` with `MagicMock` to capture calls | Module-level function |
+| `clear_session` | `monkeypatch.setattr` with `MagicMock` to capture calls | Module-level function |
+| `extract_cited_ids` | `monkeypatch.setattr` returning controlled list | Module-level function |
+| `apply_bullet_tags` | `monkeypatch.setattr` with `MagicMock` (side_effect passes through) | Module-level function |
+| `apply_structured_operations` | `monkeypatch.setattr` with `MagicMock` returning playbook | Module-level function |
+| `run_deduplication` | `monkeypatch.setattr` with `MagicMock` returning playbook | Module-level function |
+| `prune_harmful` | `monkeypatch.setattr` with `MagicMock` returning playbook | Module-level function |
+| `sys.stdin` (JSON input) | `monkeypatch.setattr` with `io.StringIO` containing JSON | Standard Python I/O mock |
+| `sys.exit` | `monkeypatch.setattr` to raise `SystemExit` for detection | Standard Python mock |
+
+### White-Box Mocking Approach
+
+The white-box tests import `src.hooks.precompact` and mock ALL `common.py` functions at the module level. This allows verifying:
+- The exact order of function calls
+- The arguments passed to each function
+- Which functions are called vs. skipped (e.g., empty transcript path)
+- That `await` is used correctly (AsyncMock raises if not awaited)
+
+The `main()` function is an `async def`, so tests use `asyncio.run()` to invoke it.
+
+### Contract Test Mocking Approach
+
+Contract tests run `precompact.py` as a subprocess with controlled stdin. To avoid real LLM calls and disk I/O, the contract tests create a wrapper script that:
+1. Patches `common.py` functions with mocks before importing `precompact`
+2. Feeds controlled JSON to stdin
+3. The subprocess exit code and stderr output are the test observables
+
+Alternatively, contract tests use `subprocess.run` with `uv run` pointing to the project, with environment variables that cause LLM functions to return empty results (no API key set, so `run_reflector`/`run_curator` return empty dicts without calling the API).
+
+### Fallback Strategy
+
+If any dependency cannot be mocked (unlikely given all are module-level functions), fall back to running `precompact.py` as a subprocess with controlled environment variables that trigger the graceful-degradation paths (no API key = empty LLM results).
+
+## Test Types
+
+| Type | When to Use |
+|------|-------------|
+| White-box tests | Test `main()` function internals: call ordering, argument passing, early exits, error paths. Can mock every common.py function and inspect call sequences. |
+| Contract tests | Test `precompact.py` as a subprocess: verify exit codes, stderr output, and observable behavior without knowledge of internal call ordering. |
+| **Deliverable tests** | **Run `precompact.py` as a subprocess the way Claude Code would invoke it. Feed it stdin JSON, verify exit code and stderr. These are included in the contract test file.** |
+
+### Deliverable Test Strategy
+
+The deliverable is: "Claude Code triggers the precompact hook via subprocess with JSON on stdin; the hook processes the transcript and exits 0 (success) or 1 (error)." Deliverable tests exercise this exact flow:
+
+1. Create a temp transcript file with controlled content.
+2. Pipe JSON with `transcript_path` to `precompact.py` via stdin.
+3. Verify exit code (0 for success, 0 for empty transcript, 1 for errors).
+4. Verify stderr output for error cases.
+
+## Adversarial Test Categories
+
+### Category 1: Invalid Input (COVERED)
+
+| TC-* | Test Case | REQ/INV | Description |
+|------|-----------|---------|-------------|
+| TC-PC-INVAL-001 | Empty transcript | REQ-PRECOMPACT-009, SCN-PRECOMPACT-009-01 | `load_transcript()` returns `[]`. Process should exit 0 immediately. |
+| TC-PC-INVAL-002 | Missing `transcript_path` in stdin JSON | REQ-PRECOMPACT-009 | `input_data.get("transcript_path")` returns `None`. `load_transcript(None)` returns `[]`. |
+| TC-PC-INVAL-003 | Malformed stdin JSON | REQ-PRECOMPACT-008, SCN-PRECOMPACT-008-01 | Invalid JSON on stdin. `json.load()` raises `JSONDecodeError`. Top-level except catches it. |
+
+### Category 2: Error Path Coverage (COVERED)
+
+| TC-* | Test Case | REQ/INV | Description |
+|------|-----------|---------|-------------|
+| TC-PC-ERR-001 | Top-level exception from pipeline | REQ-PRECOMPACT-008, SCN-PRECOMPACT-008-01 | `save_playbook` raises an exception. Stderr shows `Error: <msg>` and traceback. Exit code 1. |
+| TC-PC-ERR-002 | LLM call graceful degradation | REQ-PRECOMPACT-008, SCN-PRECOMPACT-008-02 | `run_reflector` returns empty result. Pipeline continues with empty bullet_tags and empty curator input. |
+| TC-PC-ERR-003 | `load_playbook` raises | REQ-PRECOMPACT-008 | Exception in playbook loading propagates to top-level handler. |
+
+### Category 3: Boundary Conditions (COVERED)
+
+| TC-* | Test Case | REQ/INV | Description |
+|------|-----------|---------|-------------|
+| TC-PC-BOUND-001 | Single-message transcript | REQ-PRECOMPACT-002 | Minimal non-empty transcript. Pipeline should run fully. |
+| TC-PC-BOUND-002 | Reflector returns empty bullet_tags | REQ-PRECOMPACT-003, INV-PRECOMPACT-001 | `apply_bullet_tags` receives `[]`. No-op but still called before curator. |
+| TC-PC-BOUND-003 | Curator returns empty operations | REQ-PRECOMPACT-004 | `apply_structured_operations` receives `[]`. Dedup and prune still run. |
+
+### Category 4: Source Code Inspection (COVERED)
+
+| TC-* | Test Case | REQ/INV | Description |
+|------|-----------|---------|-------------|
+| TC-PC-SRC-001 | No old pipeline function names in source | INV-PRECOMPACT-003, SCN-PRECOMPACT-001-01 | `extract_keypoints` and `update_playbook_data` do not appear anywhere in `precompact.py`. |
+| TC-PC-SRC-002 | No settings-related strings in source | REQ-PRECOMPACT-006, SCN-PRECOMPACT-006-01 | `load_settings`, `update_on_exit`, `update_on_clear` do not appear in source. |
+| TC-PC-SRC-003 | Pipeline call order matches session_end.py | INV-PRECOMPACT-002, SCN-PRECOMPACT-005-01 | Extract pipeline calls from both files and compare sequences. |
+
+### Summary: 4 of 6 adversarial categories covered (Invalid Input, Error Paths, Boundary Conditions, Source Code Inspection).
+
+Concurrency is out of scope: `precompact.py` is a single-process, single-threaded pipeline invoked by Claude Code. There is no concurrent access pattern. Resource exhaustion is out of scope: the pipeline processes a single transcript and single playbook, both of bounded size.
+
+## Contract Test Exclusions
+
+| REQ-* | Contract Test? | Reason | Covered By |
+|-------|---------------|--------|------------|
+| REQ-PRECOMPACT-002 | NO | Requires verifying reflector/curator call arguments and ordering, which is not observable via subprocess exit code alone. | test_reflector_curator_arguments, test_scn_reflector_curator_call_arguments, test_await_usage (white-box) |
+| REQ-PRECOMPACT-003 | NO | Requires verifying apply_bullet_tags is called before run_curator -- internal ordering not observable via exit code. | test_counter_update_before_curator, test_scn_bullet_tags_applied_before_curator, test_invariant_counter_update_precedes_curator (white-box) |
+| REQ-PRECOMPACT-004 | NO | Requires verifying dedup-then-prune ordering after curator ops -- internal ordering not observable via exit code. | test_dedup_then_prune_ordering, test_scn_dedup_then_prune_after_curator_ops (white-box) |
+| REQ-PRECOMPACT-005 | NO | Requires verifying pipeline function parity between precompact.py and session_end.py -- a source-level comparison not observable via subprocess. | test_parity_with_session_end, test_scn_side_by_side_parity, test_invariant_pipeline_function_parity (white-box) |
+| REQ-PRECOMPACT-007 | NO | Requires verifying clear_session is called after save_playbook -- internal call ordering not observable via exit code. | test_clear_session_after_save, test_scn_clear_session_called_as_final_step (white-box) |
+
+REQ-PRECOMPACT-001, REQ-PRECOMPACT-006, REQ-PRECOMPACT-008, and REQ-PRECOMPACT-009 have both white-box and contract tests. REQ-PRECOMPACT-002/003/004/005/007 are excluded from contract testing because they require observing internal function call ordering that is not visible through the subprocess's exit code or stderr output.
+
+## SCN-* to Test File Mapping
+
+### White-box (`tests/test_precompact_whitebox.py`)
+
+| SCN-* | Test Function |
+|-------|---------------|
+| SCN-PRECOMPACT-001-01 | test_scn_old_imports_removed |
+| SCN-PRECOMPACT-001-02 | test_scn_import_smoke_test |
+| SCN-PRECOMPACT-002-01 | test_scn_reflector_curator_call_arguments |
+| SCN-PRECOMPACT-003-01 | test_scn_bullet_tags_applied_before_curator |
+| SCN-PRECOMPACT-004-01 | test_scn_dedup_then_prune_after_curator_ops |
+| SCN-PRECOMPACT-005-01 | test_scn_side_by_side_parity |
+| SCN-PRECOMPACT-006-01 | test_scn_no_settings_logic_present |
+| SCN-PRECOMPACT-007-01 | test_scn_clear_session_called_as_final_step |
+| SCN-PRECOMPACT-008-01 | test_scn_top_level_exception_handling |
+| SCN-PRECOMPACT-008-02 | test_scn_llm_call_graceful_degradation |
+| SCN-PRECOMPACT-009-01 | test_scn_empty_transcript_exits_immediately |
+
+### Contract (`tests/test_precompact_contract.py`)
+
+| REQ-* | Test Function |
+|-------|---------------|
+| REQ-PRECOMPACT-001 | test_contract_pipeline_runs_successfully |
+| REQ-PRECOMPACT-002 | (excluded -- see Contract Test Exclusions) |
+| REQ-PRECOMPACT-003 | (excluded -- see Contract Test Exclusions) |
+| REQ-PRECOMPACT-004 | (excluded -- see Contract Test Exclusions) |
+| REQ-PRECOMPACT-005 | (excluded -- see Contract Test Exclusions) |
+| REQ-PRECOMPACT-006 | test_contract_no_settings_behavior |
+| REQ-PRECOMPACT-007 | (excluded -- see Contract Test Exclusions) |
+| REQ-PRECOMPACT-008 | test_contract_exception_causes_exit_1 |
+| REQ-PRECOMPACT-009 | test_contract_empty_transcript_exit_0 |
+
+## Precompact Test File Organization
+
+| File | Purpose | Location |
+|------|---------|----------|
+| `docs/hooks/testing.md` | Test strategy (this file, Precompact Pipeline section) | `docs/hooks/testing.md` |
+| `tests/test_precompact_whitebox.py` | White-box tests: pipeline call ordering, argument verification, early exit, error handling, source inspection, all SCN-*, all INV-* | `tests/test_precompact_whitebox.py` |
+| `tests/test_precompact_contract.py` | Contract tests: run `precompact.py` as subprocess, verify exit codes and stderr, deliverable tests | `tests/test_precompact_contract.py` |
+
+### File Headers
+
+White-box test file:
+```python
+# Spec: docs/hooks/spec.md
+# Testing: docs/hooks/testing.md
+```
+
+Contract test file:
+```python
+# Spec: docs/hooks/spec.md
+# Testing: docs/hooks/testing.md
+```
+
+Note: There is no `docs/hooks/contract.md` for precompact. Contract tests are derived from the public behavior documented in `spec.md` (the REQ-PRECOMPACT-* requirements describe the external behavior of `precompact.py` as a subprocess).
+
+## Precompact Verification Plan (Phase 2 Checklist)
+
+Before claiming Phase 2 COMPLETE:
+
+1. `uv run pytest tests/test_precompact_whitebox.py tests/test_precompact_contract.py -v` -- all tests pass
+2. All existing tests still pass: `uv run pytest tests/ -x -q`
+3. Break-the-code verification: comment out a critical line in `precompact.py`, run tests, verify failure
+4. Every `@tests` annotation references a valid REQ-*/SCN-*/INV-* from spec.md
+5. Every `@tests-contract` annotation references a valid REQ-* from spec.md
+6. Every `@tests-invariant` annotation references a valid INV-* from spec.md
+7. No `pytest.skip()` or `@pytest.mark.skip` anywhere
+8. Race detector: N/A (Python, not Go)
+9. Flaky detection: run tests multiple times to verify determinism
+10. Deliverable tests: at least one test runs `precompact.py` as a subprocess and verifies exit code

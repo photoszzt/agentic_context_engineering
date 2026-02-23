@@ -1,9 +1,11 @@
-# Requirements Specification: Hook Dependency Management (uv run)
+# Requirements Specification: Hook Infrastructure and Pipeline
 
 ## Intent Traceability
 
-This section preserves the success criteria from the approved intent.
-The full intent document is in `.planning/intent.md` for historical reference.
+This section preserves the success criteria from approved intents.
+Full intent documents are in `.planning/intent.md` (current) and `.planning/archive/` (historical).
+
+### Hook Dependency Management (SC-HOOKS-*)
 
 | SC-* | Success Criterion | REQ-*/SCN-*/INV-* |
 |------|-------------------|-------------------|
@@ -16,6 +18,20 @@ The full intent document is in `.planning/intent.md` for historical reference.
 | SC-HOOKS-007 | `install.js` resolves the absolute path to `uv` at install time (via `which uv`) and embeds it in generated commands. | REQ-HOOKS-008, SCN-HOOKS-008-01, SCN-HOOKS-008-02 |
 | SC-HOOKS-008 | `install.js` runs `uv sync --project <path>` during installation to pre-install dependencies. If `uv sync` fails, installation aborts with a clear error. | REQ-HOOKS-009, SCN-HOOKS-009-01, SCN-HOOKS-009-02 |
 | SC-HOOKS-009 | `install.js` writes valid JSON (parseable by `JSON.parse()`) to `~/.claude/settings.json`. Hook command strings embedded within are properly escaped for JSON encoding. | INV-HOOKS-007 |
+
+### Precompact Pipeline Upgrade (SC-PRECOMPACT-*)
+
+| SC-* | Success Criterion | REQ-*/SCN-*/INV-* |
+|------|-------------------|-------------------|
+| SC-PRECOMPACT-001 | `precompact.py` no longer calls or imports `extract_keypoints()` or `update_playbook_data()`. It imports and calls the 7-step pipeline functions in the same order as `session_end.py`. | REQ-PRECOMPACT-001, SCN-PRECOMPACT-001-01, SCN-PRECOMPACT-001-02 |
+| SC-PRECOMPACT-002 | The precompact hook makes two LLM calls: (1) `run_reflector(messages, playbook, cited_ids)` and (2) `run_curator(reflector_output, playbook)`. The reflector sees transcript + playbook + cited IDs; the curator sees reflector output + playbook. | REQ-PRECOMPACT-002, SCN-PRECOMPACT-002-01 |
+| SC-PRECOMPACT-003 | Bullet tags from the reflector are applied to the playbook (via `apply_bullet_tags()`) BEFORE the curator call, so the curator sees up-to-date counters. | REQ-PRECOMPACT-003, INV-PRECOMPACT-001, SCN-PRECOMPACT-003-01 |
+| SC-PRECOMPACT-004 | After curator operations are applied, `run_deduplication()` runs, followed by `prune_harmful()`. | REQ-PRECOMPACT-004, SCN-PRECOMPACT-004-01 |
+| SC-PRECOMPACT-005 | The playbook update portion of `precompact.py` is functionally identical to `session_end.py`. Same functions, same order, same arguments. Only differences: no settings checks, no reason field, always proceeds when messages non-empty. | REQ-PRECOMPACT-005, INV-PRECOMPACT-002, SCN-PRECOMPACT-005-01 |
+| SC-PRECOMPACT-006 | `precompact.py` does NOT call `load_settings()` and does NOT check `update_on_exit` or `update_on_clear`. Always runs when triggered. | REQ-PRECOMPACT-006, SCN-PRECOMPACT-006-01 |
+| SC-PRECOMPACT-007 | After saving the playbook, `precompact.py` calls `clear_session()` to reset the session marker. | REQ-PRECOMPACT-007, SCN-PRECOMPACT-007-01 |
+| SC-PRECOMPACT-008 | Top-level `try/except` preserved. Unhandled exceptions print to stderr with traceback and exit code 1. Individual LLM calls degrade gracefully (return empty results). | REQ-PRECOMPACT-008, SCN-PRECOMPACT-008-01, SCN-PRECOMPACT-008-02 |
+| SC-PRECOMPACT-009 | If `load_transcript()` returns empty list, exit code 0 without loading playbook or running pipeline. | REQ-PRECOMPACT-009, SCN-PRECOMPACT-009-01 |
 
 ---
 
@@ -492,3 +508,220 @@ To enable the testing described above, `install.js` should export the following 
 - Optionally, the stale detection filter function (if extracted as a separate helper)
 
 The `install()` function itself remains the CLI entry point and does not need to be exported, but its internal steps should delegate to testable functions rather than inlining all logic.
+
+---
+
+## Precompact Pipeline Requirements
+
+This section specifies the internal pipeline behavior of `precompact.py`. The hook replaces its old two-function pipeline (`extract_keypoints` + `update_playbook_data`) with the 7-step reflector/curator/dedup pipeline already used by `session_end.py`. Only `src/hooks/precompact.py` is modified; all pipeline functions already exist in `common.py`.
+
+### REQ-PRECOMPACT-001: Pipeline Replacement {#REQ-PRECOMPACT-001}
+- **Implements**: SC-PRECOMPACT-001
+- **GIVEN**: `precompact.py` is the precompact hook script
+- **WHEN**: The source file is inspected
+- **THEN**:
+  - `precompact.py` does NOT import `extract_keypoints` or `update_playbook_data`
+  - `precompact.py` does NOT call `extract_keypoints` or `update_playbook_data`
+  - `precompact.py` imports from `common`: `load_playbook`, `save_playbook`, `load_transcript`, `extract_cited_ids`, `run_reflector`, `apply_bullet_tags`, `run_curator`, `apply_structured_operations`, `run_deduplication`, `prune_harmful`, `clear_session`
+  - The pipeline functions are called in this exact order: `extract_cited_ids`, `run_reflector`, `apply_bullet_tags`, `run_curator`, `apply_structured_operations`, `run_deduplication`, `prune_harmful`
+
+### REQ-PRECOMPACT-002: Two-Step LLM Flow (Async) {#REQ-PRECOMPACT-002}
+- **Implements**: SC-PRECOMPACT-002
+- **GIVEN**: `precompact.py` has loaded a non-empty transcript and a playbook
+- **WHEN**: The pipeline executes
+- **THEN**:
+  - `run_reflector(messages, playbook, cited_ids)` is called first (LLM call 1), producing `reflector_output` containing analysis and `bullet_tags`
+  - `run_curator(reflector_output, playbook)` is called second (LLM call 2), producing `curator_output` containing `operations`
+  - The reflector receives the raw transcript, playbook, and cited IDs
+  - The curator receives only the reflector output and the playbook (NOT the raw transcript)
+- **Async execution model**: `run_reflector` and `run_curator` are `async def` coroutines (defined in `common.py`). They MUST be called with `await` inside an `async def main()` function. The `__main__` block MUST use `asyncio.run(main())` to execute the coroutine, matching the pattern in `session_end.py`. Calling these functions without `await` will produce coroutine objects instead of result dicts, silently breaking the pipeline.
+
+### REQ-PRECOMPACT-003: Counter Update Before Curator {#REQ-PRECOMPACT-003}
+- **Implements**: SC-PRECOMPACT-003
+- **GIVEN**: `run_reflector` has returned `reflector_output` with a `bullet_tags` list
+- **WHEN**: The pipeline proceeds to the curator step
+- **THEN**:
+  - `apply_bullet_tags(playbook, reflector_output.get("bullet_tags", []))` is called BEFORE `run_curator`
+  - The playbook object passed to `run_curator` reflects the updated helpful/harmful counters
+
+### REQ-PRECOMPACT-004: Post-Curator Dedup and Prune {#REQ-PRECOMPACT-004}
+- **Implements**: SC-PRECOMPACT-004
+- **GIVEN**: `run_curator` has returned and `apply_structured_operations` has been applied
+- **WHEN**: The pipeline completes its final steps
+- **THEN**:
+  - `run_deduplication(playbook)` is called, returning the deduplicated playbook
+  - `prune_harmful(playbook)` is called on the result, returning the pruned playbook
+  - These two steps occur in this order: dedup first, prune second
+  - Both steps occur AFTER `apply_structured_operations`
+
+### REQ-PRECOMPACT-005: Pipeline Parity with session_end.py {#REQ-PRECOMPACT-005}
+- **Implements**: SC-PRECOMPACT-005
+- **GIVEN**: Both `precompact.py` and `session_end.py` exist in `src/hooks/`
+- **WHEN**: The playbook update portion of each script is compared (from `load_playbook()` through `save_playbook()` and `clear_session()`)
+- **THEN**:
+  - The same functions are called in the same order with the same argument patterns
+  - The only differences are:
+    1. `precompact.py` does NOT call `load_settings()`
+    2. `precompact.py` does NOT check `update_on_exit` or `update_on_clear`
+    3. `precompact.py` does NOT read `input_data.get("reason", "")`
+    4. `precompact.py` always proceeds to the pipeline when messages are non-empty (no conditional skips)
+
+### REQ-PRECOMPACT-006: No Settings Checks {#REQ-PRECOMPACT-006}
+- **Implements**: SC-PRECOMPACT-006
+- **GIVEN**: `precompact.py` is triggered by context compaction
+- **WHEN**: The hook begins execution
+- **THEN**:
+  - `load_settings()` is NOT called
+  - There are no conditional checks on `update_on_exit` or `update_on_clear`
+  - The pipeline runs unconditionally when the transcript is non-empty
+
+### REQ-PRECOMPACT-007: clear_session Called After Save {#REQ-PRECOMPACT-007}
+- **Implements**: SC-PRECOMPACT-007
+- **GIVEN**: The pipeline has completed and `save_playbook(playbook)` has been called
+- **WHEN**: The final step of `precompact.py`'s main function executes
+- **THEN**:
+  - `clear_session()` is called after `save_playbook()`
+  - This resets the session marker so that `session_end.py` can distinguish the post-compaction transcript
+
+### REQ-PRECOMPACT-008: Graceful Error Handling {#REQ-PRECOMPACT-008}
+- **Implements**: SC-PRECOMPACT-008
+- **GIVEN**: `precompact.py` is executing
+- **WHEN**: An unhandled exception occurs at any point in the pipeline
+- **THEN**:
+  - The `__main__` block calls `asyncio.run(main())` inside a `try/except Exception` (matching `session_end.py`)
+  - The top-level `try/except` catches the exception (including exceptions raised inside the async `main()`)
+  - The error message is printed to stderr via `print(f"Error: {e}", file=sys.stderr)`
+  - A full traceback is printed to stderr via `traceback.print_exc(file=sys.stderr)`
+  - The process exits with code 1
+
+### REQ-PRECOMPACT-009: Empty Transcript Early Exit {#REQ-PRECOMPACT-009}
+- **Implements**: SC-PRECOMPACT-009
+- **GIVEN**: `precompact.py` has read input JSON and called `load_transcript(transcript_path)`
+- **WHEN**: `load_transcript()` returns an empty list
+- **THEN**:
+  - `sys.exit(0)` is called immediately
+  - `load_playbook()` is NOT called
+  - No pipeline functions are called
+  - No playbook file is read or written
+
+---
+
+## Precompact Pipeline Scenarios
+
+### SCN-PRECOMPACT-001-01: Old Imports Removed {#SCN-PRECOMPACT-001-01}
+- **Implements**: REQ-PRECOMPACT-001
+- **GIVEN**: The upgraded `precompact.py` source file
+- **WHEN**: The import statements are inspected (e.g., `grep "extract_keypoints\|update_playbook_data" precompact.py`)
+- **THEN**: Zero matches -- neither function name appears anywhere in the file
+- **AND**: The import block includes `extract_cited_ids`, `run_reflector`, `apply_bullet_tags`, `run_curator`, `apply_structured_operations`, `run_deduplication`, `prune_harmful`
+
+### SCN-PRECOMPACT-001-02: Import Smoke Test {#SCN-PRECOMPACT-001-02}
+- **Implements**: REQ-PRECOMPACT-001
+- **GIVEN**: The upgraded `precompact.py` exists at `src/hooks/precompact.py`
+- **WHEN**: `import precompact` is executed (or equivalent `importlib.import_module`)
+- **THEN**: No `ImportError` or `AttributeError` is raised
+- **BECAUSE**: All function names in the import list exist in `common.py`
+
+### SCN-PRECOMPACT-002-01: Reflector and Curator Call Arguments {#SCN-PRECOMPACT-002-01}
+- **Implements**: REQ-PRECOMPACT-002
+- **GIVEN**: `precompact.py` is running with a non-empty transcript containing 5 messages and a playbook with 3 sections
+- **AND**: `extract_cited_ids(messages)` has returned `cited_ids`
+- **WHEN**: The reflector call executes
+- **THEN**: `run_reflector` is called with `(messages, playbook, cited_ids)` -- the raw transcript, the full playbook, and the cited IDs
+- **AND**: When the curator call executes, `run_curator` is called with `(reflector_output, playbook)` -- the reflector's output dict and the playbook (with updated counters from `apply_bullet_tags`)
+- **AND**: The curator does NOT receive `messages` directly
+
+### SCN-PRECOMPACT-003-01: Bullet Tags Applied Before Curator Sees Playbook {#SCN-PRECOMPACT-003-01}
+- **Implements**: REQ-PRECOMPACT-003
+- **GIVEN**: `run_reflector` returned `{"analysis": "...", "bullet_tags": [{"id": "b1", "tag": "helpful"}]}`
+- **WHEN**: The pipeline proceeds
+- **THEN**: `apply_bullet_tags(playbook, [{"id": "b1", "tag": "helpful"}])` is called
+- **AND**: The `playbook` object is mutated to reflect the updated counter
+- **AND**: `run_curator(reflector_output, playbook)` is called AFTER `apply_bullet_tags` completes
+
+### SCN-PRECOMPACT-004-01: Dedup Then Prune After Curator Operations {#SCN-PRECOMPACT-004-01}
+- **Implements**: REQ-PRECOMPACT-004
+- **GIVEN**: `run_curator` returned `{"operations": [{"op": "add", ...}]}`
+- **AND**: `apply_structured_operations(playbook, operations)` has returned an updated playbook
+- **WHEN**: The final pipeline steps execute
+- **THEN**: `run_deduplication(playbook)` is called and its return value becomes the new playbook
+- **AND**: `prune_harmful(playbook)` is called on the deduplication result
+- **AND**: `save_playbook(playbook)` receives the pruned result
+
+### SCN-PRECOMPACT-005-01: Side-by-Side Parity with session_end.py {#SCN-PRECOMPACT-005-01}
+- **Implements**: REQ-PRECOMPACT-005
+- **GIVEN**: The upgraded `precompact.py` and current `session_end.py`
+- **WHEN**: The pipeline section of each is compared (from `playbook = load_playbook()` through `clear_session()`)
+- **THEN**: The function call sequence is identical:
+  1. `cited_ids = extract_cited_ids(messages)`
+  2. `reflector_output = await run_reflector(messages, playbook, cited_ids)`
+  3. `apply_bullet_tags(playbook, reflector_output.get("bullet_tags", []))`
+  4. `curator_output = await run_curator(reflector_output, playbook)`
+  5. `playbook = apply_structured_operations(playbook, curator_output.get("operations", []))`
+  6. `playbook = run_deduplication(playbook)`
+  7. `playbook = prune_harmful(playbook)`
+  8. `save_playbook(playbook)`
+  9. `clear_session()`
+- **AND**: `precompact.py` does NOT contain `load_settings`, `update_on_exit`, or `update_on_clear`
+- **AND**: `precompact.py` does NOT extract a `reason` field from `input_data` (no `reason = input_data.get("reason"` pattern)
+
+### SCN-PRECOMPACT-006-01: No Settings Logic Present {#SCN-PRECOMPACT-006-01}
+- **Implements**: REQ-PRECOMPACT-006
+- **GIVEN**: The upgraded `precompact.py` source file
+- **WHEN**: The source is searched for settings-related code
+- **THEN**: The strings `load_settings`, `update_on_exit`, and `update_on_clear` do not appear in the file
+- **AND**: The import list does NOT include `load_settings`
+- **AND**: The file does NOT contain the assignment pattern `reason = input_data.get("reason"` (i.e., the `reason` variable is never extracted from `input_data`). The word "reason" MAY appear in comments or unrelated contexts -- the check is for the behavioral pattern of reading a `reason` field from the hook's input data, not for the literal substring.
+
+### SCN-PRECOMPACT-007-01: clear_session Called as Final Step {#SCN-PRECOMPACT-007-01}
+- **Implements**: REQ-PRECOMPACT-007
+- **GIVEN**: The pipeline has run to completion and `save_playbook(playbook)` succeeded
+- **WHEN**: The main function reaches its final line (before returning)
+- **THEN**: `clear_session()` is the last call before the function returns
+- **AND**: `clear_session` is in the import list from `common`
+
+### SCN-PRECOMPACT-008-01: Top-Level Exception Handling {#SCN-PRECOMPACT-008-01}
+- **Implements**: REQ-PRECOMPACT-008
+- **GIVEN**: `precompact.py` is invoked and an unexpected exception occurs (e.g., disk full on `save_playbook`)
+- **WHEN**: The exception propagates to the `__main__` block
+- **THEN**: The `try/except` catches it
+- **AND**: `"Error: <message>"` is printed to stderr
+- **AND**: A traceback is printed to stderr
+- **AND**: The process exits with code 1
+
+### SCN-PRECOMPACT-008-02: LLM Call Graceful Degradation {#SCN-PRECOMPACT-008-02}
+- **Implements**: REQ-PRECOMPACT-008
+- **GIVEN**: `run_reflector` encounters an LLM API error internally
+- **WHEN**: `run_reflector` handles the error
+- **THEN**: It returns an empty/default result (e.g., `{"analysis": "", "bullet_tags": []}`) rather than raising
+- **AND**: The pipeline continues: `apply_bullet_tags` receives an empty list (no-op), `run_curator` receives the empty reflector output, and subsequent steps proceed
+- **NOTE**: This graceful degradation is implemented within `run_reflector` and `run_curator` in `common.py` -- not in `precompact.py` itself. The scenario verifies that the pipeline tolerates empty intermediate results.
+
+### SCN-PRECOMPACT-009-01: Empty Transcript Exits Immediately {#SCN-PRECOMPACT-009-01}
+- **Implements**: REQ-PRECOMPACT-009
+- **GIVEN**: `precompact.py` receives stdin JSON with `transcript_path` pointing to an empty conversation
+- **AND**: `load_transcript(transcript_path)` returns `[]`
+- **WHEN**: The empty check executes (`if not messages: sys.exit(0)`)
+- **THEN**: The process exits with code 0
+- **AND**: `load_playbook()` was NOT called
+- **AND**: No LLM calls were made
+- **AND**: No playbook file was written
+
+---
+
+## Precompact Pipeline Invariants
+
+### INV-PRECOMPACT-001: Counter Update Precedes Curator {#INV-PRECOMPACT-001}
+- **Implements**: SC-PRECOMPACT-003
+- **Statement**: In `precompact.py`, `apply_bullet_tags()` is ALWAYS called before `run_curator()`. The curator NEVER sees stale helpful/harmful counters. This ordering is enforced by the sequential call order in the `main()` function.
+- **Enforced by**: REQ-PRECOMPACT-003 specifies the ordering. SCN-PRECOMPACT-003-01 and SCN-PRECOMPACT-005-01 verify it.
+
+### INV-PRECOMPACT-002: Pipeline Function Parity {#INV-PRECOMPACT-002}
+- **Implements**: SC-PRECOMPACT-005
+- **Statement**: The set of pipeline functions called by `precompact.py` between `load_playbook()` and `save_playbook()` is identical to those called by `session_end.py` in the same span. The functions are: `extract_cited_ids`, `run_reflector`, `apply_bullet_tags`, `run_curator`, `apply_structured_operations`, `run_deduplication`, `prune_harmful`. The call order is identical. The arguments to each function are identical.
+- **Enforced by**: REQ-PRECOMPACT-005 specifies parity. SCN-PRECOMPACT-005-01 verifies the call sequence side-by-side.
+
+### INV-PRECOMPACT-003: No Old Pipeline Functions {#INV-PRECOMPACT-003}
+- **Implements**: SC-PRECOMPACT-001
+- **Statement**: `precompact.py` NEVER imports or calls `extract_keypoints` or `update_playbook_data`. These function names do not appear anywhere in the file -- not in imports, not in function bodies, not in comments.
+- **Enforced by**: REQ-PRECOMPACT-001 specifies removal. SCN-PRECOMPACT-001-01 verifies via source inspection.
