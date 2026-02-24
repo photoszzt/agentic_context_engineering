@@ -70,7 +70,8 @@ function mergeSettings(srcSettingsPath, absUvPath, projectDir) {
       const hooks = {
         'HOOK_COMMAND_USER_PROMPT_INJECT': 'user_prompt_inject.py',
         'HOOK_COMMAND_SESSION_END': 'session_end.py',
-        'HOOK_COMMAND_PRECOMPACT': 'precompact.py'
+        'HOOK_COMMAND_PRECOMPACT': 'precompact.py',
+        'HOOK_COMMAND_SUBAGENT_STOP': 'subagent_stop.py'
       };
 
       for (const [placeholder, scriptName] of Object.entries(hooks)) {
@@ -99,7 +100,7 @@ function mergeSettings(srcSettingsPath, absUvPath, projectDir) {
 
   // REQ-HOOKS-005: Remove all stale project hook entries before adding new ones
   // Order: remove stale FIRST, then add new (critical for idempotency per INV-HOOKS-001)
-  const projectScripts = ['user_prompt_inject.py', 'session_end.py', 'precompact.py'];
+  const projectScripts = ['user_prompt_inject.py', 'session_end.py', 'precompact.py', 'subagent_stop.py'];
   const matchingSubstrings = projectScripts.map(s => `/.claude/hooks/${s}`);
 
   if (destSettings.hooks) {
